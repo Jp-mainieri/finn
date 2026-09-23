@@ -5,14 +5,15 @@ Spec completa: "Finn — Especificação Técnica (MVP)". Este doc descreve **co
 ## Fluxo de um turno
 
 ```
-PWA (Porcupine "Finn" → WebRTC GPT-Live-1)
-  └─ evento de delegação (client) com a transcrição
+PWA (Porcupine "Finn" → WebRTC GPT-Live-1 via troca SDP em /api/realtime/session)
+  └─ session.delegation.created (transcrição remontada de session.input_transcript.delta)
        └─ POST /api/orchestrator { transcript, contextId }
             ├─ classify()  — palavra-chave, sem LLM; checa cada domínio independente
             ├─ fan-out Promise.all → spotifyAgent.handle() / wazeAgent.handle()   (in-process)
             │     └─ runToolLoop(): Neuralake /chat/completions + tools → executores reais
             └─ aggregate() → { speech, clientActions, results }
-  PWA executa clientActions (abre deep link do Waze) e devolve `speech` ao Live-1
+  PWA devolve `speech` ao Live-1 (session.commentary.append) e executa clientActions:
+  mostra botão grande com o `label` e, após o Live-1 terminar de falar, tenta abrir o deep link
 ```
 
 Os agentes também são expostos via A2A (JSON-RPC `message/send`) para chamadas externas:
@@ -21,6 +22,8 @@ Os agentes também são expostos via A2A (JSON-RPC `message/send`) para chamadas
 | --- | --- |
 | `POST /api/orchestrator` | Entrada do PWA (`OrchestratorRequest` → `OrchestratorResponse`) |
 | `POST /api/agents/{spotify,waze}` | Endpoint de task A2A |
+| `POST /api/realtime/session` | Troca SDP do WebRTC com o GPT-Live-1 (`POST /v1/live/sessions`); a `OPENAI_API_KEY` fica só no servidor. O projeto OpenAI precisa ter acesso ao GPT-Live |
+| `GET /api/spotify/login` → `/callback` | OAuth único para obter o `SPOTIFY_REFRESH_TOKEN` |
 | `GET /agents/{spotify,waze}/.well-known/agent.json` | Agent Card (rewrite → `/api/agents/[agent]/card`) |
 
 ## Contratos (congelados — mudanças só na integração)

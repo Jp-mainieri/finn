@@ -76,6 +76,18 @@ describe("orchestrate", () => {
     expect(res.speech).toBe("Salvei sua casa. Indo pra lá.");
   });
 
+  it("drops a pending continuation when the driver changes topic", async () => {
+    const agents = { spotify: fakeAgent("spotify", 0, { speech: "Tocando rock." }), waze: fakeAgent("waze", 0) };
+    const res = await orchestrate("toca rock", {
+      agents,
+      contextId: "ctx",
+      continuation: { agent: "waze", state: { pendingLabel: "casa" } },
+    });
+    expect(agents.waze.handle).not.toHaveBeenCalled();
+    expect(res.continuation).toBeUndefined();
+    expect(res.speech).toBe("Tocando rock.");
+  });
+
   it("surfaces an agent's continuation when it needs input", async () => {
     const agents = {
       spotify: fakeAgent("spotify", 0),

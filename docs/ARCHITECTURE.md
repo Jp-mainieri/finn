@@ -58,6 +58,10 @@ Regras para cada agente:
 
 Quando um agente precisa de resposta do motorista (ex.: endereço de "casa"), o executor da tool retorna `continuation: <estado>`; o `AgentResult` sai com `status: "input-required"` e o orchestrator devolve `continuation: { agent, state }` ao PWA. O PWA **reenvia esse objeto no próximo POST** da mesma janela de conversa; o orchestrator então roteia o turno para aquele agente mesmo sem palavra-chave, e o agente recebe `input.continuation = state`. Backend continua stateless.
 
+- Se o turno bate **só** com palavras-chave de outros domínios ("toca rock" enquanto o waze espera um endereço), o orchestrator descarta a continuação (mudança de assunto).
+- O PWA descarta a continuação quando a janela de conversa fecha (silêncio) e substitui pela da resposta mais recente.
+- Quem decide se o turno ainda aguarda resposta é a **última** saída de tool do turno. Turno `failed` nunca devolve `clientActions`; ações repetidas são deduplicadas.
+
 ## Detalhes de integração (fixos — spotify/waze implementam, QA testa)
 
 **Spotify** — `fetch` direto (sem SDK), para os testes poderem mockar `globalThis.fetch` por URL:
@@ -74,6 +78,12 @@ Quando um agente precisa de resposta do motorista (ex.: endereço de "casa"), o 
 - `navigate_to({destination})` com rótulo sem endereço salvo → sem `open_url`, resultado `{ needs_address: "<rótulo>" }`, `continuation: { pendingLabel: "<rótulo>" }`
 - Turno com `input.continuation.pendingLabel` → o `destination` recebido em `navigate_to` é o endereço: salva no rótulo e navega
 - Rótulo com endereço salvo → navega para o endereço salvo
+- Destino vazio → resultado `{ needs_destination: true }`, `continuation: { awaitingDestination: true }`
+
+**Formatos de resultado das tools** (o que o modelo vê; nunca contém URL):
+- `play_playlist`: `{ found: true, playlist: { id, name } }` ou `{ found: false, requested, suggestions: string[] (≤5) }` sem tocar nada
+- `list_playlists`: `{ playlists: [{ id, name }] }` · `toggle_playback`: `{ ok: true, action }`
+- `navigate_to`: `{ navigating_to, saved_place?, address_saved_now? }`, ou `needs_address` / `needs_destination`
 
 ## Pendências conhecidas
 

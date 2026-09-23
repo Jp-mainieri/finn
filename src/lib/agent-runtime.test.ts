@@ -44,6 +44,28 @@ describe("runToolLoop", () => {
     expect(res).toMatchObject({ status: "failed", speech: "Perdi a conexão com o Spotify." });
   });
 
+  it("lets the latest tool output decide input-required, and dedupes client actions", async () => {
+    let step = 0;
+    const client = new MockNeuralakeClient(() =>
+      ++step <= 2 ? toolCallMessage("navigate_to", { destination: "x" }) : textMessage("Indo."),
+    );
+    const outputs = [
+      { result: { needs_address: "casa" }, continuation: { pendingLabel: "casa" } },
+      { result: {}, clientActions: [{ type: "open_url" as const, url: "u" }, { type: "open_url" as const, url: "u" }] },
+    ];
+    const res = await runToolLoop({
+      agent: "waze",
+      client,
+      systemPrompt: "sys",
+      tools: [],
+      executors: { navigate_to: async () => outputs.shift()! },
+      input,
+    });
+    expect(res.status).toBe("completed");
+    expect(res.continuation).toBeUndefined();
+    expect(res.clientActions).toHaveLength(1);
+  });
+
   it("never throws when the client fails", async () => {
     const client = { complete: async () => Promise.reject(new Error("boom")) };
     const res = await runToolLoop({

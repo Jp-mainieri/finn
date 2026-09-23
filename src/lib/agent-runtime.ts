@@ -79,11 +79,12 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<AgentResult> {
   let inputRequired = false;
   let continuation: unknown;
 
+  // A failed turn must not act on the phone (the driver hears "couldn't do it").
   const result = (status: AgentResult["status"], speech: string): AgentResult => ({
     agent,
     status,
     speech: speech.trim(),
-    clientActions,
+    clientActions: status === "failed" ? [] : clientActions,
     toolCalls,
     ...(status === "input-required" && continuation !== undefined ? { continuation } : {}),
   });
@@ -116,9 +117,14 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<AgentResult> {
           throw err;
         }
         toolCalls.push({ name: call.function.name, arguments: args, result: output.result, ok: true });
-        if (output.clientActions) clientActions.push(...output.clientActions);
-        if (output.inputRequired || output.continuation !== undefined) inputRequired = true;
-        if (output.continuation !== undefined) continuation = output.continuation;
+        for (const action of output.clientActions ?? []) {
+          if (!clientActions.some((a) => a.type === action.type && a.url === action.url)) {
+            clientActions.push(action);
+          }
+        }
+        // The latest tool output decides whether the turn still awaits the driver.
+        inputRequired = Boolean(output.inputRequired) || output.continuation !== undefined;
+        continuation = output.continuation;
         messages.push({
           role: "tool",
           tool_call_id: call.id,

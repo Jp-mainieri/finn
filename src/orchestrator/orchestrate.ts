@@ -86,7 +86,11 @@ export async function orchestrate(
   { agents, contextId, continuation, timeoutMs = AGENT_TIMEOUT_MS }: OrchestrateOptions,
 ): Promise<OrchestratorResponse> {
   const matched = new Set(classify(transcript));
-  const resumed = continuation && AGENT_IDS.includes(continuation.agent) ? continuation : undefined;
+  // A turn that clearly belongs only to other domains means the driver changed
+  // topic ("toca rock" while waze waits for an address): drop the continuation.
+  const changedTopic = matched.size > 0 && !!continuation && !matched.has(continuation.agent);
+  const resumed =
+    continuation && AGENT_IDS.includes(continuation.agent) && !changedTopic ? continuation : undefined;
   if (resumed) matched.add(resumed.agent);
   const targets = AGENT_IDS.filter((id) => matched.has(id));
 

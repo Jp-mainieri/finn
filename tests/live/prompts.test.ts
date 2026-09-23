@@ -82,15 +82,16 @@ describe.skipIf(!LIVE)("[live] agent prompts against the real Neuralake", () => 
   );
 
   it(
-    "UC5: an inexact playlist name makes the model call list_playlists before play_playlist",
+    // Decision (2026-09-23): the model may skip list_playlists — play_playlist's executor
+    // fuzzy-matches against the driver's playlists itself, saving one model round-trip.
+    // What matters is that the right playlist plays.
+    "UC5: an inexact playlist name plays the right playlist",
     async () => {
       const res = await turn("toca a playlist pagode fim de semana");
       const music = resultOf(res, "spotify");
       console.info("[live UC5]", JSON.stringify({ speech: res.speech, calls: music.toolCalls.map((c) => c.name) }));
 
-      const names = music.toolCalls.map((c) => c.name);
-      expect(names[0]).toBe("list_playlists");
-      expect(names).toContain("play_playlist");
+      expect(music.toolCalls.map((c) => c.name)).toContain("play_playlist");
       expect(spotify.callsTo("play")[0]?.json).toMatchObject({
         context_uri: `spotify:playlist:${playlistNamed("Pagode do Fim de Semana").id}`,
       });

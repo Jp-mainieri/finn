@@ -88,10 +88,15 @@ Quando um agente precisa de resposta do motorista (ex.: endereço de "casa"), o 
 - `list_playlists`: `{ playlists: [{ id, name }] }` · `toggle_playback`: `{ ok: true, action }`
 - `navigate_to`: `{ navigating_to, saved_place?, address_saved_now? }`, ou `needs_address` / `needs_destination`
 
+## Decisões de produto
+
+- **UC5 (2026-09-23)**: o modelo pode chamar `play_playlist` direto; o executor sempre resolve o nome contra as playlists do motorista (fuzzy) antes de tocar, e ambiguidade vira `found: false` com sugestões. Economiza uma ida ao modelo (~1,3s). `list_playlists` fica para UC4 e para quando o modelo quiser conferir.
+- **Fora do MVP**: busca no catálogo do Spotify (`/v1/search`) para playlists que o motorista não segue; correção por voz do tipo "não, essa não" (exigiria lembrar a última escolha).
+
 ## Pendências conhecidas
 
 - **Memória da Neuralake**: o mecanismo (campo/header) para memória por agente e Cross Memory não está documentado publicamente. `CompletionRequest.memoryScope` abstrai isso; o `HttpNeuralakeClient` ainda não envia nada (TODO `neuralake-memory`).
-- **Suporte a `tools`** na Neuralake assumido idêntico ao da OpenAI — validar com a chave real.
+- ~~Suporte a `tools` na Neuralake~~: confirmado em produção (2026-09-23), formato OpenAI.
 
 ## Dev
 

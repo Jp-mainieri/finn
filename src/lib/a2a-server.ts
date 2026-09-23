@@ -56,8 +56,14 @@ export async function handleA2ARequest(agent: Agent, request: Request): Promise<
     .trim();
   if (!transcript) return rpcError(body.id, -32602, "Invalid params: message needs a text part");
 
+  // A follow-up to an `input-required` task carries the agent's state as { continuation } in a data part.
+  const continuation = message.parts
+    .filter((p) => p.kind === "data")
+    .map((p) => (p.data as { continuation?: unknown } | null)?.continuation)
+    .find((c) => c !== undefined);
+
   const contextId = message.contextId ?? crypto.randomUUID();
-  const result = await agent.handle({ transcript, contextId });
+  const result = await agent.handle({ transcript, contextId, continuation });
 
   const reply: A2AMessage = {
     kind: "message",

@@ -16,6 +16,8 @@ export interface ToolOutput {
   clientActions?: ClientAction[];
   /** Set by tools that need more info from the driver (e.g. unknown address). */
   inputRequired?: boolean;
+  /** Agent-defined state to resume next turn; implies `inputRequired`. */
+  continuation?: unknown;
 }
 
 export type ToolExecutor = (
@@ -75,6 +77,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<AgentResult> {
   const toolCalls: ToolInvocation[] = [];
   const clientActions: ClientAction[] = [];
   let inputRequired = false;
+  let continuation: unknown;
 
   const result = (status: AgentResult["status"], speech: string): AgentResult => ({
     agent,
@@ -82,6 +85,7 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<AgentResult> {
     speech: speech.trim(),
     clientActions,
     toolCalls,
+    ...(status === "input-required" && continuation !== undefined ? { continuation } : {}),
   });
 
   try {
@@ -113,7 +117,8 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<AgentResult> {
         }
         toolCalls.push({ name: call.function.name, arguments: args, result: output.result, ok: true });
         if (output.clientActions) clientActions.push(...output.clientActions);
-        if (output.inputRequired) inputRequired = true;
+        if (output.inputRequired || output.continuation !== undefined) inputRequired = true;
+        if (output.continuation !== undefined) continuation = output.continuation;
         messages.push({
           role: "tool",
           tool_call_id: call.id,

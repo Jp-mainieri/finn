@@ -1,8 +1,12 @@
 import { agents } from "@/agents/registry";
+import { authorize } from "@/lib/auth";
 import type { OrchestratorRequest } from "@/lib/contracts/client-events";
 import { orchestrate } from "@/orchestrator/orchestrate";
 
 export async function POST(request: Request) {
+  const denied = authorize(request);
+  if (denied) return denied;
+
   let body: Partial<OrchestratorRequest>;
   try {
     body = await request.json();
@@ -18,6 +22,7 @@ export async function POST(request: Request) {
   const response = await orchestrate(transcript, {
     agents,
     contextId: body.contextId || crypto.randomUUID(),
+    continuation: body.continuation,
   });
   return Response.json(response);
 }

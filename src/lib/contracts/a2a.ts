@@ -24,6 +24,19 @@ export interface AgentTaskInput {
   contextId: string;
   /** Aborted by the orchestrator when the agent exceeds its time budget. */
   signal?: AbortSignal;
+  /**
+   * The agent's own `AgentResult.continuation` from the previous turn, echoed
+   * back when that turn ended in `input-required` (e.g. the waze-agent asked
+   * for the full address of "casa" and this turn carries the answer).
+   */
+  continuation?: unknown;
+}
+
+/** Pending follow-up owned by one agent, round-tripped through the PWA. */
+export interface Continuation {
+  agent: AgentId;
+  /** Opaque, JSON-serializable, agent-defined state. */
+  state: unknown;
 }
 
 /**
@@ -49,6 +62,8 @@ export interface AgentResult {
   speech: string;
   clientActions: ClientAction[];
   toolCalls: ToolInvocation[];
+  /** Set with status `input-required`; handed back as `AgentTaskInput.continuation` next turn. */
+  continuation?: unknown;
 }
 
 export interface Agent {

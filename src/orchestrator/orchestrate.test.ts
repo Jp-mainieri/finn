@@ -59,6 +59,36 @@ describe("orchestrate", () => {
     expect(res.speech).toBe("Não consegui mexer na música agora. Indo pra casa.");
   });
 
+  it("routes a keyword-less follow-up to the agent that asked for it", async () => {
+    const agents = {
+      spotify: fakeAgent("spotify", 0),
+      waze: fakeAgent("waze", 0, { speech: "Salvei sua casa. Indo pra lá." }),
+    };
+    const res = await orchestrate("Rua Augusta, 123", {
+      agents,
+      contextId: "ctx",
+      continuation: { agent: "waze", state: { pendingLabel: "casa" } },
+    });
+    expect(agents.spotify.handle).not.toHaveBeenCalled();
+    expect(agents.waze.handle).toHaveBeenCalledWith(
+      expect.objectContaining({ continuation: { pendingLabel: "casa" } }),
+    );
+    expect(res.speech).toBe("Salvei sua casa. Indo pra lá.");
+  });
+
+  it("surfaces an agent's continuation when it needs input", async () => {
+    const agents = {
+      spotify: fakeAgent("spotify", 0),
+      waze: fakeAgent("waze", 0, {
+        status: "input-required",
+        speech: "Qual o endereço da sua casa?",
+        continuation: { pendingLabel: "casa" },
+      }),
+    };
+    const res = await orchestrate("me leva pra casa", { agents, contextId: "ctx" });
+    expect(res.continuation).toEqual({ agent: "waze", state: { pendingLabel: "casa" } });
+  });
+
   it("asks what to do when nothing matches", async () => {
     const agents = { spotify: fakeAgent("spotify", 0), waze: fakeAgent("waze", 0) };
     const res = await orchestrate("que horas são?", { agents, contextId: "ctx" });

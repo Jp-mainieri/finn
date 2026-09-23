@@ -7,7 +7,7 @@
  * to Live-1 as the delegation result so it is spoken to the driver.
  */
 
-import type { AgentResult } from "./a2a";
+import type { AgentResult, Continuation } from "./a2a";
 
 /** Something the backend can't do itself and the PWA must do on the phone. */
 export type ClientAction = OpenUrlAction;
@@ -24,6 +24,8 @@ export interface OrchestratorRequest {
   transcript: string;
   /** Stable id for the current Live-1 conversation window; used as A2A contextId. */
   contextId?: string;
+  /** Echo of the previous response's `continuation`, if any (within the same conversation window). */
+  continuation?: Continuation;
 }
 
 export interface OrchestratorResponse {
@@ -33,4 +35,6 @@ export interface OrchestratorResponse {
   clientActions: ClientAction[];
   /** Raw per-agent results, for debugging / on-screen support UI. */
   results: AgentResult[];
+  /** Present when an agent is waiting for the driver's answer; the PWA must send it back next turn. */
+  continuation?: Continuation;
 }

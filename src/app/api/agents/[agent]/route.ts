@@ -1,8 +1,12 @@
 import { getAgent } from "@/agents/registry";
 import { handleA2ARequest } from "@/lib/a2a-server";
+import { authorize } from "@/lib/auth";
 
 /** A2A task endpoint (JSON-RPC `message/send`). */
 export async function POST(request: Request, ctx: RouteContext<"/api/agents/[agent]">) {
+  const denied = authorize(request);
+  if (denied) return denied;
+
   const { agent: id } = await ctx.params;
   const agent = getAgent(id);
   if (!agent) return Response.json({ error: "Unknown agent" }, { status: 404 });

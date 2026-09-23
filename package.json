@@ -8,6 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "test:acceptance": "vitest run tests/acceptance",
+    "test:live": "FINN_LIVE=1 node --env-file-if-exists=.env.local node_modules/vitest/vitest.mjs run tests/live",
+    "test:smoke": "node tests/smoke/smoke.mjs",
     "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {

@@ -5,6 +5,8 @@ export const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
 export const SPOTIFY_AUTHORIZE_URL = "https://accounts.spotify.com/authorize";
 export const SPOTIFY_SCOPES = [
   "user-modify-playback-state",
+  // Lists devices so playback can start on the phone when none is active.
+  "user-read-playback-state",
   "playlist-read-private",
   "playlist-read-collaborative",
 ];

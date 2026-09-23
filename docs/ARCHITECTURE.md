@@ -73,6 +73,7 @@ Quando um agente precisa de resposta do motorista (ex.: endereço de "casa"), o 
 - `list_playlists`: `GET https://api.spotify.com/v1/me/playlists?limit=50` (seguindo `next`); resultado `{ playlists: [{ id, name }] }`
 - `play_playlist`: resolve o nome → playlist (exato, senão fuzzy; sem match → resultado `{ found: false, suggestions: [...] }` para o modelo reagir) e `PUT https://api.spotify.com/v1/me/player/play` com `{ context_uri: "spotify:playlist:<id>" }`
 - `toggle_playback`: `play` → `PUT /v1/me/player/play` sem body; `pause` → `PUT /v1/me/player/pause`; `skip` → `POST /v1/me/player/next`
+- Sem aparelho ativo (`404`/`NO_ACTIVE_DEVICE`) em `play_playlist` ou retomar → `GET /v1/me/player/devices` (escopo `user-read-playback-state`), escolhe ativo > smartphone > computador > outro não restrito e repete com `?device_id=`. Sem aparelho ou falha na consulta → mantém o erro amigável. Pausar/pular não fazem fallback.
 - `401` → renova o token e tenta 1x; se falhar de novo → `UserFacingError`. `404`/`NO_ACTIVE_DEVICE` → `UserFacingError` pedindo pra abrir o Spotify em algum aparelho. Qualquer outro erro → `UserFacingError` curto.
 
 **Waze**:
@@ -91,6 +92,7 @@ Quando um agente precisa de resposta do motorista (ex.: endereço de "casa"), o 
 ## Decisões de produto
 
 - **UC5 (2026-09-23)**: o modelo pode chamar `play_playlist` direto; o executor sempre resolve o nome contra as playlists do motorista (fuzzy) antes de tocar, e ambiguidade vira `found: false` com sugestões. Economiza uma ida ao modelo (~1,3s). `list_playlists` fica para UC4 e para quando o modelo quiser conferir.
+- **Auto-seleção de aparelho (2026-09-23)**: fora da spec original; adicionada porque no carro o Spotify costuma estar aberto mas inativo. Exigiu o 4º escopo OAuth `user-read-playback-state`.
 - **Fora do MVP**: busca no catálogo do Spotify (`/v1/search`) para playlists que o motorista não segue; correção por voz do tipo "não, essa não" (exigiria lembrar a última escolha).
 
 ## Pendências conhecidas

@@ -266,7 +266,11 @@ export class VoiceController {
       onRemoteStream: (stream: MediaStream) => this.session === session && audio.attachRemote(stream),
       onUserTranscript: (fragment: import("./transcript-buffer").TranscriptFragment) => {
         if (this.session !== session) return;
-        if (fragment.delta && fragment.delta !== "…") {
+        const isPlaceholder =
+          fragment.delta === "…" ||
+          fragment.delta === "Processando fala…" ||
+          fragment.delta === "(Não ouvi nenhuma fala)";
+        if (fragment.delta && !isPlaceholder) {
           this.transcripts.add(fragment);
         }
         this.caption("user", fragment.delta);
@@ -335,8 +339,12 @@ export class VoiceController {
   private caption(speaker: "user" | "assistant", delta: string): void {
     const key = speaker === "user" ? "userText" : "assistantText";
     const current = this.view[key];
+    const isPlaceholder =
+      current === "…" ||
+      current === "Processando fala…" ||
+      current === "(Não ouvi nenhuma fala)";
     const text =
-      this.captionTurn === speaker && current !== "…"
+      this.captionTurn === speaker && !isPlaceholder
         ? current + delta
         : delta.trimStart();
     this.captionTurn = speaker;

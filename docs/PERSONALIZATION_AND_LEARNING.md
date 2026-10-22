@@ -111,6 +111,50 @@ Mantendo um buffer dos **últimos 2 a 3 turnos da viagem ativa** (`ActiveTripMem
 
 ---
 
+### Camada 4: O Harness Agêntico Proativo, Dinâmico e Auto-Otimizável (Longo Prazo)
+
+Enquanto as Camadas 1 a 3 transformam o Finn num copiloto que conhece o motorista, a **Camada 4** transforma o próprio motor de orquestração num **Self-Improving Agentic Harness**:
+
+#### 4.1. Descoberta Dinâmica de Skills & Roteamento Híbrido (Two-Tier Triage Router)
+- **Auto-Descoberta via Agent Cards (`/.well-known/agent.json`) e MCP:** O motorista pode instalar novos agentes no seu perfil (ex.: `google-calendar-agent`, `whatsapp-agent`, `smart-home-agent`, `fuel-price-agent`).
+- **Roteador de 2 Estágios:**
+  - **Estágio 1 (0ms–2ms — Regex + Cache de Intenção no Redis):** Se a frase bater com uma keyword registrada ou com um comando que esse motorista já falou antes (cacheado no Redis), roteia instantaneamente sem LLM.
+  - **Estágio 2 (~150ms — Triage Router Leve):** Se o motorista pedir algo inédito envolvendo múltiplos agentes instalados, o Harness inspeciona as `skills` dos Agent Cards ativos do motorista e monta um plano de execução.
+
+#### 4.2. Execução em Grafo (DAG) — Encadeamento entre Agentes (Pipelines A2A)
+- Evolui do fan-out puramente independente (`Promise.all`) para suportar dependências entre agentes quando a saída de um alimenta a entrada do outro:
+  - *Exemplo real:* Motorista diz *"Finn, me leva para a minha próxima reunião"*.
+  - **Passo 1:** O Harness aciona o `calendar-agent` → obtém o local do evento das 14h (*"Av. Brigadeiro Faria Lima, 3477"*).
+  - **Passo 2:** Injeta esse endereço como entrada do `waze-agent` → gera o deep link de navegação para a reunião.
+  - **Passo 3 (Opcional):** Se o motorista completou com *"e avisa o João que estou indo"*, aciona o `whatsapp-agent` em paralelo.
+
+#### 4.3. Copiloto Proativo Baseado em Gatilhos de Contexto (Event-Driven Triggers)
+- O Harness deixa de ser apenas reativo à voz e passa a reagir a eventos do contexto (sensores do PWA, GPS, horário e agenda):
+  - **Gatilho de Proximidade (Geofence no PWA):** A 200 metros do endereço salvo como `casa`, o Harness pode oferecer/acionar um webhook ou agente de Smart Home (*"Chegando em casa. Quer abrir o portão?"*).
+  - **Gatilho de Agenda:** Ao iniciar uma viagem 20 minutos antes de um compromisso presencial com endereço no calendário, sugere imediatamente a rota.
+
+#### 4.4. Loop de Auto-Otimização de Prompts e Fast-Paths (Self-Improving Harness)
+1. **Compilação Automática de Fast-Paths (Prompt-to-Rule Distillation):**
+   - Quando um comando novo exige chamadas completas ao LLM, o worker em background analisa a execução.
+   - Se o motorista repete a mesma intenção/comando 3 vezes, o worker destila uma **regra determinística cacheada no Redis** para aquele perfil (`intenção normalizada → tool_call + argumentos`).
+   - Nas próximas vezes, um comando que levava ~2,5s no LLM passa a ser resolvido em **~5ms direto do Redis**, pulando até a 1ª chamada de LLM.
+2. **Avaliação Automática por Feedback Implícito (Implicit Feedback Eval):**
+   - Se o motorista faz um pedido e, em menos de 15 segundos, emite outro comando do mesmo domínio corrigindo ou trocando a ação (ex.: pediu uma playlist e logo trocou para outra), o Harness registra `implicit_negative_feedback` no turno anterior.
+   - O Background Worker usa esses sinais para recalibrar os pesos de fuzzy-match e os exemplos (*few-shot*) injetados no prompt daquele motorista.
+
+---
+
+### Resumo Comparativo das 4 Camadas
+
+| Camada | Foco Principal | Latência | Como o Finn age |
+| :--- | :--- | :--- | :--- |
+| **Camada 1** | **Memória de Entidades** (Lugares dinâmicos + Apelidos/Top Playlists) | `~0-5ms` | Entende o vocabulário próprio do motorista (*"academia"*, *"meu treino"*). |
+| **Camada 2** | **Rotina Temporal** (Dia da semana + Horário) | `~3-5ms` | Antecipa trajeto e música ao entrar no carro (*"O de sempre?"*). |
+| **Camada 3** | **Memória Episódica & Curto Prazo** (Últimos turnos + Neuralake Scope) | `~5-8ms` | Mantém conversa contínua (*"a segunda"*, *"não, essa não"*). |
+| **Camada 4** | **Harness Autônomo** (DAGs A2A, Gatilhos Proativos & Auto-Compilação) | `~5ms` (cacheado) | Encadeia agentes (Agenda → Waze), reage ao contexto e compila hábitos em regras instantâneas no Redis. |
+
+---
+
 ## 4. Estratégia de Evolução de Persistência (Do Zero-Infra ao Redis)
 
 Para manter a filosofia ágil e sem gargalos de latência, a persistência evolui em dois níveis compatíveis entre si:

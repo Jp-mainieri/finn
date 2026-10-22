@@ -85,23 +85,42 @@ No carro, qualquer acesso a banco de dados tradicional no caminho crítico (*hot
 
 ---
 
-### Camada 3: Memória de Curto Prazo da Viagem e Correção Natural
+### Camada 3: Memória Episódica, Curto Prazo da Viagem & Cross-Agent Memory na Neuralake (Médio/Longo Prazo)
 
-Hoje cada comando de voz é tratado de forma isolada (exceto quando um agente pede `input-required`). Com um buffer dos **últimos 2 a 3 turnos da viagem ativa** (`TripContext`), habilitamos três fluxos essenciais no carro:
+No código atual (`src/lib/neuralake/client.ts` e `src/lib/agent-runtime.ts`), cada chamada já prepara o campo `memoryScope: "finn-spotify"` e `"finn-waze"`. Nesta camada, estruturamos a memória por perfil de motorista (`memoryScope: "finn-user-<driverId>-<agent>"`) combinada com o Redis em **duas frentes complementares**:
+
+#### 3.1. Memória de Curto Prazo da Viagem (Correção Natural e Conversa Contínua)
+Hoje, cada comando de voz é tratado de forma isolada (exceto quando um agente pede `input-required`). Se o Finn toca a playlist errada e o motorista diz *"não, essa não, toca a outra de rock"*, ele não lembra o que acabou de tocar.
+Mantendo um buffer dos **últimos 2 a 3 turnos da viagem ativa** (`ActiveTripMemory` no Redis com TTL de 2 horas e espelhado no `continuation`/contexto da janela), habilitamos três fluxos essenciais no carro:
 
 1. **Escolha por Ordem ("A primeira" / "A segunda"):**
    - *Motorista:* "Toca rock"
    - *Finn:* "Achei Rock Nacional e Rock Clássico. Qual delas?"
-   - *Motorista:* "A segunda" → O Finn sabe que `"A segunda"` refere-se a `"Rock Clássico"` do turno anterior e toca imediatamente.
+   - *Motorista:* "A segunda" → O Finn sabe que `"A segunda"` refere-se a `"Rock Clássico"` sugerida no turno anterior e toca imediatamente.
 2. **Correção Imediata ("Não, essa não"):**
    - *Motorista:* "Toca pagode" → Finn toca *"Pagode 90"*.
    - *Motorista:* "Não, essa não, toca a outra de pagode" → O Finn vê no histórico da viagem que *"Pagode 90"* acabou de ser escolhida, exclui ela da busca e toca a próxima candidata (*"Pagode do Fim de Semana"*).
 3. **Referência Cruzada na Mesma Viagem:**
    - Lembrar o destino que acabou de ser definido ou a playlist que está tocando caso o motorista pergunte *"qual playlist está tocando mesmo?"*.
 
+#### 3.2. Extração Assíncrona de Fatos (Background Learning & Cross-Agent Memory)
+- Após cada viagem (ou ao final de cada turno via `waitUntil()` em background, sem travar a resposta de voz), o sistema consolida os fatos aprendidos no perfil do motorista (no Redis e no `memoryScope` do motorista na Neuralake):
+  - Atualiza automaticamente os contadores de playlists favoritas (`topPlaylists`) e associações de apelidos (`aliases` como `"treino" -> "Drumz 🥁🗯️"`).
+  - Atualiza a matriz de rotinas por dia da semana e horário (`RoutineMatrix`).
+  - Persiste novos lugares aprendidos no dicionário de endereços do motorista (`savedPlaces`).
+
 ---
 
-## 4. Schema Proposto para o Redis (`DriverProfile`)
+## 4. Estratégia de Evolução de Persistência (Do Zero-Infra ao Redis)
+
+Para manter a filosofia ágil e sem gargalos de latência, a persistência evolui em dois níveis compatíveis entre si:
+
+- **Nível 1 (Imediato — Zero Custo / Local-First):** O objeto `DriverProfile` (endereços aprendidos, apelidos de playlists, histórico de horários e últimos 2 turnos da viagem) fica salvo no `localStorage` do celular do motorista e vai junto no `driverContext` a cada requisição (0ms de latência de leitura).
+- **Nível 2 (Multi-Device & Produção com Redis + Identidade Spotify):** Ao conectar o Spotify via OAuth, vinculamos o `DriverProfile` ao `spotify_user_id` do motorista e sincronizamos com o **Redis (Upstash em `gru1` São Paulo)** para leitura em ~3–8ms e escrita assíncrona em background, permitindo que o perfil acompanhe o motorista em qualquer aparelho sem depender apenas da memória local do navegador.
+
+---
+
+## 5. Schema Proposto para o Redis (`DriverProfile` & `ActiveTripMemory`)
 
 Estrutura leve em JSON/Hashes no Redis (~2 KB por motorista, leitura em <5ms):
 
@@ -161,7 +180,7 @@ export interface ActiveTripMemory {
 
 ---
 
-## 5. Ordem Recomendada de Implementação
+## 6. Ordem Recomendada de Implementação
 
 1. **Etapa 1 — Memória de Curto Prazo da Viagem (`ActiveTripMemory`):**
    - Permitir responder *"a primeira"*, *"a segunda"* quando houver sugestões de playlist, e *"não, essa não"* para trocar a playlist recém-colocada.

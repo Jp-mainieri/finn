@@ -230,6 +230,16 @@ export class SttTtsVoiceSession implements VoiceSession {
       startMs: this.sessionOffsetMs(),
       endMs: this.sessionOffsetMs(),
     });
+    // When the user manually taps "Pronto", ALWAYS prefer the complete MediaRecorder recording
+    // of the entire session so we never send just a 300ms pre-roll slice!
+    if (this.mediaRecorder) {
+      this.isRecording = false;
+      this.speechFramesCount = 0;
+      this.recordedChunks = [];
+      this.preroll = [];
+      this.flushMediaRecorderAndSend();
+      return;
+    }
     if (this.isRecording && this.recordedChunks.length > 0 && this.receivedPcmFrames) {
       this.speechFramesCount = Math.max(this.speechFramesCount, Math.ceil(MIN_SPEECH_MS / 32));
       this.finalizeUtterance();
@@ -241,8 +251,11 @@ export class SttTtsVoiceSession implements VoiceSession {
       void this.transcribeAndDelegate(chunks);
       return;
     }
-    // iOS fallback: flush MediaRecorder and send the recorded blob
-    this.flushMediaRecorderAndSend();
+    this.options.handlers.onUserTranscript({
+      delta: "(Sem áudio capturado no microfone)",
+      startMs: this.sessionOffsetMs(),
+      endMs: this.sessionOffsetMs(),
+    });
   }
 
   private finalizeUtterance(): void {
@@ -270,8 +283,18 @@ export class SttTtsVoiceSession implements VoiceSession {
   private flushMediaRecorderAndSend(): void {
     const mr = this.mediaRecorder;
     if (!mr) return;
+    let sent = false;
     const sendBlob = () => {
-      if (this.closed || this.mediaChunks.length === 0) return;
+      if (sent || this.closed) return;
+      sent = true;
+      if (this.mediaChunks.length === 0) {
+        this.options.handlers.onUserTranscript({
+          delta: "(Áudio vazio no gravador)",
+          startMs: this.sessionOffsetMs(),
+          endMs: this.sessionOffsetMs(),
+        });
+        return;
+      }
       const blob = new Blob(this.mediaChunks, { type: this.mediaMimeType });
       this.mediaChunks = [];
       void this.transcribeBlobAndDelegate(blob, this.mediaMimeType);
@@ -281,12 +304,14 @@ export class SttTtsVoiceSession implements VoiceSession {
       }
     };
     if (mr.state === "recording") {
-      mr.onstop = sendBlob;
+      mr.addEventListener("stop", sendBlob, { once: true });
       try {
+        mr.requestData?.();
         mr.stop();
       } catch {
         sendBlob();
       }
+      setTimeout(sendBlob, 300);
     } else {
       sendBlob();
     }
@@ -329,6 +354,11 @@ export class SttTtsVoiceSession implements VoiceSession {
       }
 
       if (!res.ok) {
+        this.options.handlers.onUserTranscript({
+          delta: `(Erro na transcrição: HTTP ${res.status})`,
+          startMs: this.sessionOffsetMs(),
+          endMs: this.sessionOffsetMs(),
+        });
         this.options.handlers.onError("Transcription error");
         return;
       }

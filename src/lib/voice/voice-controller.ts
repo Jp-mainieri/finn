@@ -161,7 +161,13 @@ export class VoiceController {
   /** Manually finishes and sends the user's current utterance right away. */
   commitSpeech(): void {
     this.audio?.unlockSpeechSynthesis();
-    this.session?.commitSpeech?.();
+    this.machine.dispatch({ type: "WORK_STARTED" });
+    try {
+      this.session?.commitSpeech?.();
+    } finally {
+      // Keep "Pensando…" while transcription is in flight (up to 1.5s if no delegation follows)
+      setTimeout(() => this.machine.dispatch({ type: "WORK_FINISHED" }), 1500);
+    }
   }
 
   hangUp(): void {
@@ -269,7 +275,7 @@ export class VoiceController {
         const isPlaceholder =
           fragment.delta === "…" ||
           fragment.delta === "Processando fala…" ||
-          fragment.delta === "(Não ouvi nenhuma fala)";
+          fragment.delta.startsWith("(");
         if (fragment.delta && !isPlaceholder) {
           this.transcripts.add(fragment);
         }
@@ -342,7 +348,7 @@ export class VoiceController {
     const isPlaceholder =
       current === "…" ||
       current === "Processando fala…" ||
-      current === "(Não ouvi nenhuma fala)";
+      current.startsWith("(");
     const text =
       this.captionTurn === speaker && !isPlaceholder
         ? current + delta

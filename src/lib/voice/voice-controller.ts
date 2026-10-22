@@ -154,7 +154,14 @@ export class VoiceController {
   talk(): void {
     if (this.view.needsToken) return;
     void this.audio?.resume();
+    this.audio?.unlockSpeechSynthesis();
     this.machine.dispatch({ type: "WAKE" });
+  }
+
+  /** Manually finishes and sends the user's current utterance right away. */
+  commitSpeech(): void {
+    this.audio?.unlockSpeechSynthesis();
+    this.session?.commitSpeech?.();
   }
 
   hangUp(): void {
@@ -259,7 +266,9 @@ export class VoiceController {
       onRemoteStream: (stream: MediaStream) => this.session === session && audio.attachRemote(stream),
       onUserTranscript: (fragment: import("./transcript-buffer").TranscriptFragment) => {
         if (this.session !== session) return;
-        this.transcripts.add(fragment);
+        if (fragment.delta && fragment.delta !== "…") {
+          this.transcripts.add(fragment);
+        }
         this.caption("user", fragment.delta);
         this.machine.dispatch({ type: "USER_SPEECH" });
       },
@@ -325,7 +334,11 @@ export class VoiceController {
   /** Captions: a speaker's first fragment after the other one spoke starts a new line. */
   private caption(speaker: "user" | "assistant", delta: string): void {
     const key = speaker === "user" ? "userText" : "assistantText";
-    const text = this.captionTurn === speaker ? this.view[key] + delta : delta.trimStart();
+    const current = this.view[key];
+    const text =
+      this.captionTurn === speaker && current !== "…"
+        ? current + delta
+        : delta.trimStart();
     this.captionTurn = speaker;
     this.update({ [key]: text });
   }

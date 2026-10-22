@@ -115,9 +115,22 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
           )}
         </div>
       ) : conversing ? (
-        <button onClick={() => controller.hangUp()} className={`${BIG_BUTTON} border-2 border-border bg-surface text-foreground`}>
-          Encerrar conversa
-        </button>
+        <div className="space-y-3">
+          {voice.activity === "listening" && (
+            <button
+              onClick={() => controller.commitSpeech()}
+              className={`${BIG_BUTTON} bg-accent text-background`}
+            >
+              Pronto, enviar fala
+            </button>
+          )}
+          <button
+            onClick={() => controller.hangUp()}
+            className={`${BIG_BUTTON} border-2 border-border bg-surface text-foreground`}
+          >
+            Encerrar conversa
+          </button>
+        </div>
       ) : (
         <button
           onClick={() => controller.talk()}

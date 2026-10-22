@@ -34,6 +34,8 @@ export interface VoiceSession {
   close(): Promise<void>;
   /** Optional check if the assistant is actively speaking (e.g. for native SpeechSynthesis or audio player). */
   isSpeaking?(): boolean;
+  /** Optional manual trigger to immediately finish and send the current user utterance. */
+  commitSpeech?(): void;
 }
 
 export class UnauthorizedError extends Error {

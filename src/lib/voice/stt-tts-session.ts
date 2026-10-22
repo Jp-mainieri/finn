@@ -155,9 +155,9 @@ export class SttTtsVoiceSession implements VoiceSession {
         this.speechStartMs = now;
         this.lastSpeechMs = now;
         this.recordedChunks = [...this.preroll, frame];
-        // Signal user speech onset (delta: "") to reset idle timer without polluting transcripts
+        // Signal user speech onset ("…") so UI shows voice was detected & idle timer resets
         this.options.handlers.onUserTranscript({
-          delta: "",
+          delta: "…",
           startMs: this.sessionOffsetMs(),
           endMs: this.sessionOffsetMs(),
         });
@@ -176,6 +176,19 @@ export class SttTtsVoiceSession implements VoiceSession {
       if (silenceDuration >= VAD_SILENCE_MS || totalDuration >= MAX_UTTERANCE_MS) {
         this.finalizeUtterance();
       }
+    }
+  }
+
+  /** Manually finishes and sends the current utterance (or any captured audio) right away. */
+  commitSpeech(): void {
+    if (!this.connected || this.closed) return;
+    if (this.isRecording && this.recordedChunks.length > 0) {
+      this.speechFramesCount = Math.max(this.speechFramesCount, Math.ceil(MIN_SPEECH_MS / 32));
+      this.finalizeUtterance();
+    } else if (this.preroll.length > 0) {
+      const chunks = [...this.preroll];
+      this.preroll = [];
+      void this.transcribeAndDelegate(chunks);
     }
   }
 

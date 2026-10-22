@@ -23,6 +23,7 @@ export class AudioIO {
   private worklet: AudioWorkletNode | null = null;
   private frameSink: ((frame: Int16Array) => void) | null = null;
   private sessionFrameSink: ((frame: Int16Array) => void) | null = null;
+  private micAnalyser: AnalyserNode | null = null;
   private remoteAnalyser: AnalyserNode | null = null;
   private remoteSource: MediaStreamAudioSourceNode | null = null;
   private readonly levelBuffer = new Float32Array(1024);
@@ -40,6 +41,21 @@ export class AudioIO {
     // WebRTC stream succeed without another tap.
     this.output.src = SILENT_WAV;
     void this.output.play().catch(() => undefined);
+    this.unlockSpeechSynthesis();
+  }
+
+  /** Unlocks iOS Safari speechSynthesis inside a user tap gesture. */
+  unlockSpeechSynthesis(): void {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    try {
+      const synth = window.speechSynthesis;
+      synth.getVoices?.();
+      const u = new SpeechSynthesisUtterance("");
+      u.volume = 0;
+      synth.speak(u);
+    } catch {
+      // ignore
+    }
   }
 
   get stream(): MediaStream | null {
@@ -64,22 +80,88 @@ export class AudioIO {
     this.mic?.getTracks().forEach((t) => t.stop());
     this.mic = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS });
 
-    await this.context.audioWorklet.addModule(PCM_WORKLET_PATH);
+    await this.context.resume().catch(() => undefined);
     const source = this.context.createMediaStreamSource(this.mic);
-    this.worklet = new AudioWorkletNode(this.context, "pcm-frame-processor", {
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-      processorOptions: { frameLength: 512 },
-    });
-    this.worklet.port.onmessage = (event: MessageEvent<Int16Array>) => {
-      this.frameSink?.(event.data);
-      this.sessionFrameSink?.(event.data);
-    };
-    // Keep the worklet pulled by the graph without making any sound.
+    this.micAnalyser = this.context.createAnalyser();
+    this.micAnalyser.fftSize = this.levelBuffer.length;
+    source.connect(this.micAnalyser);
+
     const mute = this.context.createGain();
     mute.gain.value = 0;
-    source.connect(this.worklet).connect(mute).connect(this.context.destination);
+
+    try {
+      await this.context.audioWorklet.addModule(PCM_WORKLET_PATH);
+      this.worklet = new AudioWorkletNode(this.context, "pcm-frame-processor", {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        processorOptions: { frameLength: 512 },
+      });
+      this.worklet.port.onmessage = (event: MessageEvent<Int16Array>) => {
+        this.receivedWorkletFrames = true;
+        this.frameSink?.(event.data);
+        this.sessionFrameSink?.(event.data);
+      };
+      // Keep the worklet pulled by the graph without making any sound.
+      source.connect(this.worklet).connect(mute).connect(this.context.destination);
+      this.updateWorkletState();
+    } catch (err) {
+      console.warn("[voice] AudioWorklet unavailable; using ScriptProcessor fallback", err);
+      this.worklet = null;
+    }
+
+    // Fallback: on iOS Safari if AudioWorklet fails or never emits frames,
+    // use a ScriptProcessorNode to downsample to 16 kHz Int16 frames.
+    this.attachScriptProcessorFallback(source, mute);
     return this.mic;
+  }
+
+  private scriptProcessor: ScriptProcessorNode | null = null;
+  private receivedWorkletFrames = false;
+
+  private attachScriptProcessorFallback(source: MediaStreamAudioSourceNode, mute: GainNode): void {
+    if (typeof this.context.createScriptProcessor !== "function") return;
+    try {
+      const sp = this.context.createScriptProcessor(2048, 1, 1);
+      const inRate = this.context.sampleRate || 48000;
+      const step = inRate / 16000;
+      let acc = new Int16Array(512);
+      let filled = 0;
+      let pos = 0;
+      sp.onaudioprocess = (ev) => {
+        if (this.receivedWorkletFrames) return; // AudioWorklet is working fine
+        if (!this.frameSink && !this.sessionFrameSink) return;
+        const input = ev.inputBuffer.getChannelData(0);
+        while (pos < input.length) {
+          const idx = Math.min(input.length - 1, Math.floor(pos));
+          const s = Math.max(-1, Math.min(1, input[idx]));
+          acc[filled++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          if (filled === 512) {
+            const out = acc;
+            acc = new Int16Array(512);
+            filled = 0;
+            this.frameSink?.(out);
+            this.sessionFrameSink?.(out);
+          }
+          pos += step;
+        }
+        pos -= input.length;
+      };
+      source.connect(sp);
+      sp.connect(mute);
+      mute.connect(this.context.destination);
+      this.scriptProcessor = sp;
+    } catch {
+      // ignore
+    }
+  }
+
+  /** RMS (0..1) of the user's microphone right now; 0 when unknown. */
+  micLevel(): number {
+    if (!this.micAnalyser) return 0;
+    this.micAnalyser.getFloatTimeDomainData(this.levelBuffer);
+    let sum = 0;
+    for (const v of this.levelBuffer) sum += v * v;
+    return Math.sqrt(sum / this.levelBuffer.length);
   }
 
   private updateWorkletState(): void {
@@ -159,9 +241,14 @@ export class AudioIO {
   release(): void {
     this.frameSink = null;
     this.sessionFrameSink = null;
+    this.receivedWorkletFrames = false;
     this.worklet?.port.postMessage({ command: "disable" });
     this.worklet?.disconnect();
     this.worklet = null;
+    this.scriptProcessor?.disconnect();
+    this.scriptProcessor = null;
+    this.micAnalyser?.disconnect();
+    this.micAnalyser = null;
     this.detachRemote();
     this.mic?.getTracks().forEach((t) => t.stop());
     this.mic = null;

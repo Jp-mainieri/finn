@@ -147,9 +147,9 @@ describe("SttTtsVoiceSession session lifecycle & VAD", () => {
       session.processFrame(speechFrame);
     }
 
-    // Verify onUserTranscript was called with "" on speech start
+    // Verify onUserTranscript was called with "…" on speech start
     expect(handlers.onUserTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({ delta: "" }),
+      expect.objectContaining({ delta: "…" }),
     );
 
     // 3. Send silence frames to trigger VAD_SILENCE_MS (900ms)

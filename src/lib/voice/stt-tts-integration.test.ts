@@ -66,7 +66,9 @@ describe("SttTtsVoiceSession + TranscriptBuffer + DelegationHandler integration"
       getToken: () => "test-token",
       getTtsMode: () => "native",
       handlers: {
-        onUserTranscript: (fragment) => transcripts.add(fragment),
+        onUserTranscript: (fragment) => {
+          if (fragment.delta && fragment.delta !== "…") transcripts.add(fragment);
+        },
         onAssistantTranscript: vi.fn(),
         onDelegation: (delegation) => void delegationHandler.handle(delegation),
         onRemoteStream: vi.fn(),
@@ -156,7 +158,9 @@ describe("SttTtsVoiceSession + TranscriptBuffer + DelegationHandler integration"
       getToken: () => "test-token",
       getTtsMode: () => "native",
       handlers: {
-        onUserTranscript: (fragment) => transcripts.add(fragment),
+        onUserTranscript: (fragment) => {
+          if (fragment.delta && fragment.delta !== "…") transcripts.add(fragment);
+        },
         onAssistantTranscript: vi.fn(),
         onDelegation: (delegation) => void delegationHandler.handle(delegation),
         onRemoteStream: vi.fn(),
@@ -267,7 +271,9 @@ describe("SttTtsVoiceSession + TranscriptBuffer + DelegationHandler integration"
       getToken: () => "test-token",
       getTtsMode: () => "native",
       handlers: {
-        onUserTranscript: (fragment) => transcripts.add(fragment),
+        onUserTranscript: (fragment) => {
+          if (fragment.delta && fragment.delta !== "…") transcripts.add(fragment);
+        },
         onAssistantTranscript: vi.fn(),
         onDelegation: (delegation) => void delegationHandler.handle(delegation),
         onRemoteStream: vi.fn(),

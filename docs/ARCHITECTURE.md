@@ -2,19 +2,21 @@
 
 Spec completa: "Finn — Especificação Técnica (MVP)". Este doc descreve **como o código está organizado** e **quem é dono de quê** nas frentes paralelas.
 
-## Fluxo de um turno
+## Fluxo de um turno (Padrão Atual: Whisper STT + Natural TTS)
 
 ```
-PWA (Porcupine "Finn" → WebRTC GPT-Live-1 via troca SDP em /api/realtime/session)
-  └─ session.delegation.created (transcrição remontada de session.input_transcript.delta)
-       └─ POST /api/orchestrator { transcript, contextId }
-            ├─ classify()  — palavra-chave, sem LLM; checa cada domínio independente
+PWA (Porcupine "Finn" ou botão → AudioIO 16 kHz PCM + VAD Local no browser)
+  └─ POST /api/realtime/transcribe (Groq whisper-large-v3-turbo ~200ms / fallback OpenAI)
+       └─ POST /api/orchestrator { transcript, contextId, continuation, driverContext }
+            ├─ classify()  — palavra-chave lida do próprio Agent, sem LLM
             ├─ fan-out Promise.all → spotifyAgent.handle() / wazeAgent.handle()   (in-process)
             │     └─ runToolLoop(): Neuralake /chat/completions + tools → executores reais
-            └─ aggregate() → { speech, clientActions, results }
-  PWA devolve `speech` ao Live-1 (session.commentary.append) e executa clientActions:
-  mostra botão grande com o `label` e, após o Live-1 terminar de falar, tenta abrir o deep link
+            │        (com FINN_FAST_SPEECH=1: responde em 1 round-trip determinístico)
+            └─ aggregate() → { speech, clientActions, results, continuation }
+  PWA fala `speech` (SpeechSynthesis nativo iOS ou OpenAI TTS HD em /api/realtime/tts)
+  e executa clientActions (salva endereços no aparelho e abre o deep link do Waze)
 ```
+*(O fluxo WebRTC do GPT-Live-1 em `live-session.ts` e `/api/realtime/session` permanece preservado no código, porém bloqueado como "EM BREVE" por padrão para controle de custos).*
 
 Os agentes também são expostos via A2A (JSON-RPC `message/send`) para chamadas externas:
 
@@ -22,8 +24,10 @@ Os agentes também são expostos via A2A (JSON-RPC `message/send`) para chamadas
 | --- | --- |
 | `POST /api/orchestrator` | Entrada do PWA (`OrchestratorRequest` → `OrchestratorResponse`) |
 | `POST /api/agents/{spotify,waze}` | Endpoint de task A2A |
-| `POST /api/realtime/session` | Troca SDP do WebRTC com o GPT-Live-1 (`POST /v1/live/sessions`); a `OPENAI_API_KEY` fica só no servidor. O projeto OpenAI precisa ter acesso ao GPT-Live |
-| `GET /api/spotify/login` → `/callback` | OAuth único para obter o `SPOTIFY_REFRESH_TOKEN` |
+| `POST /api/realtime/transcribe` | Transcrição de voz (Groq `whisper-large-v3-turbo` ou OpenAI `gpt-4o-mini-transcribe`) |
+| `POST /api/realtime/tts` | Síntese de voz HD opcional (`gpt-4o-mini-tts`) |
+| `POST /api/realtime/session` | Troca SDP do WebRTC com o GPT-Live-1 (desativado por padrão; exige `ENABLE_GPT_LIVE=1`) |
+| `GET /api/spotify/login` → `/callback` | OAuth do Spotify (suporta tanto setup do servidor quanto conexão por motorista no PWA) |
 | `GET /agents/{spotify,waze}/.well-known/agent.json` | Agent Card (rewrite → `/api/agents/[agent]/card`) |
 
 ## Contratos (congelados — mudanças só na integração)
@@ -91,9 +95,13 @@ Quando um agente precisa de resposta do motorista (ex.: endereço de "casa"), o 
 
 ## Decisões de produto
 
+- **Camada de Voz STT+TTS e Bloqueio do GPT-Live-1 (2026-10-22)**: substituído o GPT-Live-1 ($0,05/min) como motor padrão por `SttTtsVoiceSession` (VAD local 16 kHz no `AudioIO` + Groq `whisper-large-v3-turbo` gratuito + voz nativa aprimorada do iOS ou OpenAI TTS HD opcional), reduzindo o custo do MVP a zero. O GPT-Live-1 fica marcado como `EM BREVE` no modal de configurações e bloqueado na API (`403`) salvo `ENABLE_GPT_LIVE=1`.
+- **Fast-Path de 1 Round-Trip (`FINN_FAST_SPEECH=1`, 2026-10-22)**: corta a 2ª chamada de LLM à Neuralake quando a tool retorna confirmação determinística no 1º passo, economizando ~1,5s por comando.
+- **Multi-User Stateless & Agentes Plug-and-Play (2026-10-22)**: cada agente declara suas próprias `keywords` e `failureSpeech`; o PWA envia `driverContext` (`savedAddresses` e `spotifyRefreshToken`) permitindo que cada motorista conecte seu próprio Spotify e salve seus endereços no aparelho.
+- **Personalização, Learning & Cache Redis**: especificado em [`docs/PERSONALIZATION_AND_LEARNING.md`](./PERSONALIZATION_AND_LEARNING.md).
 - **UC5 (2026-09-23)**: o modelo pode chamar `play_playlist` direto; o executor sempre resolve o nome contra as playlists do motorista (fuzzy) antes de tocar, e ambiguidade vira `found: false` com sugestões. Economiza uma ida ao modelo (~1,3s). `list_playlists` fica para UC4 e para quando o modelo quiser conferir.
 - **Auto-seleção de aparelho (2026-09-23)**: fora da spec original; adicionada porque no carro o Spotify costuma estar aberto mas inativo. Exigiu o 4º escopo OAuth `user-read-playback-state`.
-- **Fora do MVP**: busca no catálogo do Spotify (`/v1/search`) para playlists que o motorista não segue; correção por voz do tipo "não, essa não" (exigiria lembrar a última escolha).
+- **Fora do MVP**: busca no catálogo do Spotify (`/v1/search`) para playlists que o motorista não segue; correção por voz do tipo "não, essa não" (exigiria lembrar a última escolha — planejado na Etapa 1 de [`PERSONALIZATION_AND_LEARNING.md`](./PERSONALIZATION_AND_LEARNING.md)).
 
 ## Pendências conhecidas
 

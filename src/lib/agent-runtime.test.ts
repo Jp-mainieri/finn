@@ -79,4 +79,123 @@ describe("runToolLoop", () => {
     });
     expect(res).toMatchObject({ status: "failed", speech: "Falhou." });
   });
+
+  describe("fastSpeech optimization", () => {
+    it("skips 2nd LLM call when FINN_FAST_SPEECH=1 and fastSpeech returns speech", async () => {
+      process.env.FINN_FAST_SPEECH = "1";
+      try {
+        let callsCount = 0;
+        const client = new MockNeuralakeClient(() => {
+          callsCount++;
+          return toolCallMessage("play_playlist", { playlist_name: "Rock" });
+        });
+        const res = await runToolLoop({
+          agent: "spotify",
+          client,
+          systemPrompt: "sys",
+          tools: SPOTIFY_TOOLS,
+          executors: {
+            play_playlist: async () => ({
+              result: { found: true, playlist: { name: "Rock" } },
+            }),
+          },
+          fastSpeech: (tool, result) => {
+            if (tool === "play_playlist") {
+              return `Tocando ${(result as { playlist: { name: string } }).playlist.name}.`;
+            }
+            return null;
+          },
+          input,
+        });
+        expect(res).toMatchObject({ status: "completed", speech: "Tocando Rock." });
+        expect(callsCount).toBe(1); // 1 LLM round-trip instead of 2!
+      } finally {
+        delete process.env.FINN_FAST_SPEECH;
+      }
+    });
+
+    it("falls through to 2nd LLM call when fastSpeech returns null", async () => {
+      process.env.FINN_FAST_SPEECH = "1";
+      try {
+        let callsCount = 0;
+        const client = new MockNeuralakeClient((req) => {
+          callsCount++;
+          return req.messages.at(-1)?.role === "tool"
+            ? textMessage("Fallback confirmation.")
+            : toolCallMessage("list_playlists", {});
+        });
+        const res = await runToolLoop({
+          agent: "spotify",
+          client,
+          systemPrompt: "sys",
+          tools: SPOTIFY_TOOLS,
+          executors: {
+            list_playlists: async () => ({ result: { playlists: [] } }),
+          },
+          fastSpeech: () => null,
+          input,
+        });
+        expect(res).toMatchObject({ status: "completed", speech: "Fallback confirmation." });
+        expect(callsCount).toBe(2);
+      } finally {
+        delete process.env.FINN_FAST_SPEECH;
+      }
+    });
+
+    it("does not fast-speech when inputRequired is true", async () => {
+      process.env.FINN_FAST_SPEECH = "1";
+      try {
+        let callsCount = 0;
+        const client = new MockNeuralakeClient((req) => {
+          callsCount++;
+          return req.messages.at(-1)?.role === "tool"
+            ? textMessage("Qual endereço?")
+            : toolCallMessage("navigate_to", { destination: "casa" });
+        });
+        const res = await runToolLoop({
+          agent: "waze",
+          client,
+          systemPrompt: "sys",
+          tools: [],
+          executors: {
+            navigate_to: async () => ({
+              result: { needs_address: "casa" },
+              continuation: { pendingLabel: "casa" },
+            }),
+          },
+          fastSpeech: () => "Fast speech should not be used",
+          input,
+        });
+        expect(res.status).toBe("input-required");
+        expect(res.speech).toBe("Qual endereço?");
+        expect(callsCount).toBe(2);
+      } finally {
+        delete process.env.FINN_FAST_SPEECH;
+      }
+    });
+
+    it("does not fast-speech when FINN_FAST_SPEECH is not 1", async () => {
+      delete process.env.FINN_FAST_SPEECH;
+      let callsCount = 0;
+      const client = new MockNeuralakeClient((req) => {
+        callsCount++;
+        return req.messages.at(-1)?.role === "tool"
+          ? textMessage("Spoken by model.")
+          : toolCallMessage("play_playlist", { playlist_name: "Rock" });
+      });
+      const res = await runToolLoop({
+        agent: "spotify",
+        client,
+        systemPrompt: "sys",
+        tools: SPOTIFY_TOOLS,
+        executors: {
+          play_playlist: async () => ({ result: { found: true } }),
+        },
+        fastSpeech: () => "Fast speech",
+        input,
+      });
+      expect(res.speech).toBe("Spoken by model.");
+      expect(callsCount).toBe(2);
+    });
+  });
 });

@@ -1,4 +1,4 @@
-import type { Continuation } from "@/lib/contracts/a2a";
+import type { Continuation, DriverContext } from "@/lib/contracts/a2a";
 import type { OrchestratorRequest, OrchestratorResponse } from "@/lib/contracts/client-events";
 import { ORCHESTRATOR_PATH, ORCHESTRATOR_TIMEOUT_MS } from "./config";
 
@@ -10,6 +10,7 @@ export type OrchestratorResult =
 
 export interface OrchestratorClientOptions {
   getToken: () => string | null;
+  getDriverContext?: () => DriverContext | undefined;
   fetchImpl?: typeof fetch;
   newContextId?: () => string;
   timeoutMs?: number;
@@ -25,7 +26,10 @@ export interface OrchestratorClientOptions {
 export class OrchestratorClient {
   private contextId: string;
   private continuation: Continuation | undefined;
-  private readonly options: Required<Omit<OrchestratorClientOptions, "fetchImpl">> & { fetchImpl?: typeof fetch };
+  private readonly options: Required<Omit<OrchestratorClientOptions, "fetchImpl" | "getDriverContext">> & {
+    fetchImpl?: typeof fetch;
+    getDriverContext?: () => DriverContext | undefined;
+  };
 
   constructor(options: OrchestratorClientOptions) {
     this.options = {
@@ -57,6 +61,10 @@ export class OrchestratorClient {
 
     const body: OrchestratorRequest = { transcript, contextId: this.contextId };
     if (this.continuation) body.continuation = this.continuation;
+    const driverContext = this.options.getDriverContext?.();
+    if (driverContext && (driverContext.spotifyRefreshToken || (driverContext.savedAddresses && Object.keys(driverContext.savedAddresses).length > 0))) {
+      body.driverContext = driverContext;
+    }
 
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const controller = new AbortController();

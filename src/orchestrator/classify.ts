@@ -1,11 +1,12 @@
-import type { AgentId } from "@/lib/contracts/a2a";
+import { agents as defaultAgents } from "@/agents/registry";
+import type { Agent, AgentId } from "@/lib/contracts/a2a";
 
 /**
  * Keyword triage (no LLM call — latency is critical). Each domain is checked
  * independently, so a double command (UC7) matches both.
  * Patterns run against lowercased, accent-stripped text.
  */
-const PATTERNS: Record<AgentId, RegExp[]> = {
+export const DEFAULT_PATTERNS: Record<AgentId, readonly RegExp[]> = {
   spotify: [
     /\b(toca|tocar|toque|tocando|play)\b/,
     /\bplaylists?\b/,
@@ -34,9 +35,18 @@ export function normalize(text: string): string {
 }
 
 /** Returns every agent whose domain the transcript touches, in stable order. */
-export function classify(transcript: string): AgentId[] {
+export function classify(
+  transcript: string,
+  customAgents?: Record<string, Pick<Agent, "keywords">>,
+): AgentId[] {
   const text = normalize(transcript);
-  return (Object.keys(PATTERNS) as AgentId[]).filter((id) =>
-    PATTERNS[id].some((re) => re.test(text)),
-  );
+  const registry = customAgents ?? defaultAgents;
+  const candidateIds = Object.keys(registry) as AgentId[];
+  return candidateIds.filter((id) => {
+    const patterns =
+      registry[id]?.keywords ??
+      (DEFAULT_PATTERNS as Record<string, readonly RegExp[]>)[id] ??
+      [];
+    return patterns.some((re) => re.test(text));
+  });
 }

@@ -1,4 +1,11 @@
-import { AGENT_IDS, type Agent, type AgentId, type AgentResult, type Continuation } from "@/lib/contracts/a2a";
+import {
+  AGENT_IDS,
+  type Agent,
+  type AgentId,
+  type AgentResult,
+  type Continuation,
+  type DriverContext,
+} from "@/lib/contracts/a2a";
 import type { OrchestratorResponse } from "@/lib/contracts/client-events";
 import { classify } from "./classify";
 
@@ -17,6 +24,7 @@ export interface OrchestrateOptions {
   /** Echoed from the previous turn: its agent gets this turn even without a keyword match. */
   continuation?: Continuation;
   timeoutMs?: number;
+  driverContext?: DriverContext;
 }
 
 /** Runs one agent with a time budget; never rejects. */
@@ -26,12 +34,13 @@ async function runAgent(
   contextId: string,
   timeoutMs: number,
   continuation: unknown,
+  driverContext?: DriverContext,
 ): Promise<AgentResult> {
   const controller = new AbortController();
   const failed = (): AgentResult => ({
     agent: agent.id,
     status: "failed",
-    speech: FAILURE_SPEECH[agent.id],
+    speech: agent.failureSpeech ?? FAILURE_SPEECH[agent.id] ?? "Não consegui fazer isso agora.",
     clientActions: [],
     toolCalls: [],
   });
@@ -47,7 +56,7 @@ async function runAgent(
 
   try {
     return await Promise.race([
-      agent.handle({ transcript, contextId, signal: controller.signal, continuation }),
+      agent.handle({ transcript, contextId, signal: controller.signal, continuation, driverContext }),
       timeout,
     ]);
   } catch (err) {
@@ -83,9 +92,9 @@ export function aggregate(results: AgentResult[]): OrchestratorResponse {
  */
 export async function orchestrate(
   transcript: string,
-  { agents, contextId, continuation, timeoutMs = AGENT_TIMEOUT_MS }: OrchestrateOptions,
+  { agents, contextId, continuation, timeoutMs = AGENT_TIMEOUT_MS, driverContext }: OrchestrateOptions,
 ): Promise<OrchestratorResponse> {
-  const matched = new Set(classify(transcript));
+  const matched = new Set(classify(transcript, agents));
   // A turn that clearly belongs only to other domains means the driver changed
   // topic ("toca rock" while waze waits for an address): drop the continuation.
   const changedTopic = matched.size > 0 && !!continuation && !matched.has(continuation.agent);
@@ -102,6 +111,7 @@ export async function orchestrate(
         contextId,
         timeoutMs,
         resumed?.agent === id ? resumed.state : undefined,
+        driverContext,
       ),
     ),
   );

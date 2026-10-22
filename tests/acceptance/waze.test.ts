@@ -201,6 +201,6 @@ describe("[waze] saved addresses — casa / trabalho", () => {
     );
     const done = answer.json.result!;
     expect(done.status.state).toBe("completed");
-    expect(done.artifacts[0].parts[0].data.clientActions.map((a) => a.url)).toEqual([wazeUrl("Rua Augusta, 123")]);
+    expect(openUrls(done.artifacts[0].parts[0].data)).toEqual([wazeUrl("Rua Augusta, 123")]);
   });
 });

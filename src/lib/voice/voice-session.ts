@@ -32,6 +32,8 @@ export interface VoiceSession {
   speak(delegationId: string | null, text: string): string;
   /** Graceful close; resolves after the provider confirms or a timeout. Never rejects. */
   close(): Promise<void>;
+  /** Optional check if the assistant is actively speaking (e.g. for native SpeechSynthesis or audio player). */
+  isSpeaking?(): boolean;
 }
 
 export class UnauthorizedError extends Error {

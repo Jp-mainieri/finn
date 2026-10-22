@@ -19,4 +19,19 @@ describe("classify", () => {
   ])("%s → %j", (transcript, expected) => {
     expect(classify(transcript)).toEqual(expected);
   });
+
+  it("supports custom agents with keywords", () => {
+    const custom = {
+      spotify: { keywords: [/tocame/] },
+    };
+    expect(classify("tocame essa cancao", custom)).toEqual(["spotify"]);
+    expect(classify("pausa", custom)).toEqual([]);
+  });
+
+  it("falls back to DEFAULT_PATTERNS if custom agent lacks keywords", () => {
+    const custom = {
+      spotify: {},
+    };
+    expect(classify("pausa", custom)).toEqual(["spotify"]);
+  });
 });

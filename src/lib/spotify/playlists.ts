@@ -16,11 +16,17 @@ interface PlaylistPage {
 }
 
 /** All of the user's playlists (owned + followed), following `next` links. */
-export async function listPlaylists(signal?: AbortSignal): Promise<Playlist[]> {
+export async function listPlaylists(
+  signal?: AbortSignal,
+  refreshToken?: string,
+): Promise<Playlist[]> {
   const playlists: Playlist[] = [];
   let url: string | null = PLAYLISTS_URL;
   for (let page = 0; url && page < MAX_PAGES; page++) {
-    const data: PlaylistPage | null = await spotifyRequest<PlaylistPage>(url, { signal });
+    const data: PlaylistPage | null = await spotifyRequest<PlaylistPage>(url, {
+      signal,
+      refreshToken,
+    });
     for (const item of data?.items ?? []) {
       if (item?.id && item.name) playlists.push({ id: item.id, name: item.name });
     }

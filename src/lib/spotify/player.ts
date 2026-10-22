@@ -41,6 +41,7 @@ export function pickDevice(devices: SpotifyDevice[]): SpotifyDevice | undefined 
 async function withDeviceFallback(
   run: (deviceId?: string) => Promise<unknown>,
   signal?: AbortSignal,
+  refreshToken?: string,
 ): Promise<void> {
   try {
     await run();
@@ -49,7 +50,10 @@ async function withDeviceFallback(
     if (!isNoDeviceError(err)) throw err;
     let device: SpotifyDevice | undefined;
     try {
-      const res = await spotifyRequest<{ devices?: SpotifyDevice[] }>("/me/player/devices", { signal });
+      const res = await spotifyRequest<{ devices?: SpotifyDevice[] }>("/me/player/devices", {
+        signal,
+        refreshToken,
+      });
       device = pickDevice(res?.devices ?? []);
     } catch (lookupErr) {
       if (signal?.aborted) throw lookupErr;
@@ -65,32 +69,48 @@ function withDeviceId(path: string, deviceId?: string): string {
 }
 
 /** Starts a context (e.g. `spotify:playlist:<id>`), waking a device if none is active. */
-export async function playContext(contextUri: string, signal?: AbortSignal): Promise<void> {
+export async function playContext(
+  contextUri: string,
+  signal?: AbortSignal,
+  refreshToken?: string,
+): Promise<void> {
   await withDeviceFallback(
     (deviceId) =>
       spotifyRequest(withDeviceId("/me/player/play", deviceId), {
         method: "PUT",
         body: { context_uri: contextUri },
         signal,
+        refreshToken,
       }),
     signal,
+    refreshToken,
   );
 }
 
-export async function controlPlayback(action: PlaybackAction, signal?: AbortSignal): Promise<void> {
+export async function controlPlayback(
+  action: PlaybackAction,
+  signal?: AbortSignal,
+  refreshToken?: string,
+): Promise<void> {
   switch (action) {
     case "play":
       await withDeviceFallback(
-        (deviceId) => spotifyRequest(withDeviceId("/me/player/play", deviceId), { method: "PUT", signal }),
+        (deviceId) =>
+          spotifyRequest(withDeviceId("/me/player/play", deviceId), {
+            method: "PUT",
+            signal,
+            refreshToken,
+          }),
         signal,
+        refreshToken,
       );
       return;
     // Nothing is playing without an active device, so pause/skip keep the plain error.
     case "pause":
-      await spotifyRequest("/me/player/pause", { method: "PUT", signal });
+      await spotifyRequest("/me/player/pause", { method: "PUT", signal, refreshToken });
       return;
     case "skip":
-      await spotifyRequest("/me/player/next", { method: "POST", signal });
+      await spotifyRequest("/me/player/next", { method: "POST", signal, refreshToken });
       return;
   }
 }

@@ -28,20 +28,41 @@ export async function GET(request: NextRequest) {
   // `request.url` may report a normalized host, so compare against the Host header.
   const callback = new URL(redirectUri);
   const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  const isPwa = request.nextUrl.searchParams.get("mode") === "pwa";
+
   if (host && host !== callback.host && !request.nextUrl.searchParams.has("hop")) {
-    return NextResponse.redirect(new URL("/api/spotify/login?hop=1", callback.origin));
+    const hopUrl = new URL(
+      `/api/spotify/login?hop=1${isPwa ? "&mode=pwa" : ""}`,
+      callback.origin,
+    );
+    return NextResponse.redirect(hopUrl);
   }
 
   const state = randomBytes(16).toString("hex");
+  const isSecure =
+    callback.protocol === "https:" ||
+    request.nextUrl.protocol === "https:" ||
+    request.headers.get("x-forwarded-proto") === "https" ||
+    request.url.startsWith("https:");
+
   const response = NextResponse.redirect(buildAuthorizeUrl(clientId, redirectUri, state));
   response.cookies.set(OAUTH_STATE_COOKIE, state, {
     httpOnly: true,
     // Always https in production; the http loopback URI is dev-only.
-    secure: callback.protocol === "https:",
+    secure: isSecure,
     sameSite: "lax",
     path: "/api/spotify",
     maxAge: OAUTH_STATE_MAX_AGE_S,
   });
+  if (isPwa) {
+    response.cookies.set("finn_spotify_mode", "pwa", {
+      httpOnly: true,
+      secure: isSecure,
+      sameSite: "lax",
+      path: "/api/spotify",
+      maxAge: OAUTH_STATE_MAX_AGE_S,
+    });
+  }
   response.headers.set("Cache-Control", "no-store");
   return response;
 }

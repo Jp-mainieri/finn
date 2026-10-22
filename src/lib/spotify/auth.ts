@@ -28,11 +28,16 @@ let pendingRefresh: Promise<string> | undefined;
 // Spotify may rotate the refresh token; keep the newest for this instance's lifetime.
 let rotatedRefreshToken: string | undefined;
 
+const customTokens = new Map<string, CachedToken>();
+const customPending = new Map<string, Promise<string>>();
+
 /** Clears the in-memory access token (tests, or after a 401). */
 export function resetSpotifyTokenCache(): void {
   cachedToken = undefined;
   pendingRefresh = undefined;
   rotatedRefreshToken = undefined;
+  customTokens.clear();
+  customPending.clear();
 }
 
 function spotifyEnv(name: string): string {
@@ -125,8 +130,50 @@ async function refreshAccessToken(signal?: AbortSignal): Promise<string> {
  * Concurrent callers share one in-flight refresh.
  */
 export async function getAccessToken(
-  opts: { forceRefresh?: boolean; signal?: AbortSignal } = {},
+  opts: { forceRefresh?: boolean; signal?: AbortSignal; refreshToken?: string } = {},
 ): Promise<string> {
+  const customRt = opts.refreshToken?.trim();
+  const envRt = process.env.SPOTIFY_REFRESH_TOKEN?.trim();
+
+  if (customRt && customRt !== envRt) {
+    if (opts.forceRefresh) customTokens.delete(customRt);
+    const cached = customTokens.get(customRt);
+    if (cached && cached.expiresAt > Date.now()) return cached.accessToken;
+
+    let pending = customPending.get(customRt);
+    if (!pending) {
+      pending = (async () => {
+        const json = await requestToken(
+          { grant_type: "refresh_token", refresh_token: customRt },
+          opts.signal,
+        );
+        const token: CachedToken = {
+          accessToken: json.access_token,
+          expiresAt: Date.now() + json.expires_in * 1000 - EXPIRY_MARGIN_MS,
+        };
+        if (customTokens.size > 100) {
+          const now = Date.now();
+          for (const [k, v] of customTokens.entries()) {
+            if (v.expiresAt <= now) customTokens.delete(k);
+          }
+          if (customTokens.size > 100) {
+            const firstKey = customTokens.keys().next().value;
+            if (firstKey) customTokens.delete(firstKey);
+          }
+        }
+        customTokens.set(customRt, token);
+        if (json.refresh_token && json.refresh_token !== customRt) {
+          customTokens.set(json.refresh_token, token);
+        }
+        return json.access_token;
+      })().finally(() => {
+        customPending.delete(customRt);
+      });
+      customPending.set(customRt, pending);
+    }
+    return pending;
+  }
+
   if (opts.forceRefresh) cachedToken = undefined;
   if (cachedToken && cachedToken.expiresAt > Date.now()) return cachedToken.accessToken;
 

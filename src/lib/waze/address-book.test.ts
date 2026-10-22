@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getAddressBook, InProcessAddressBook, parseSavedAddresses, resetAddressBook } from "./address-book";
+import {
+  getAddressBook,
+  InProcessAddressBook,
+  LayeredAddressBook,
+  parseSavedAddresses,
+  resetAddressBook,
+} from "./address-book";
 
 describe("parseSavedAddresses", () => {
   beforeEach(() => {
@@ -50,6 +56,25 @@ describe("InProcessAddressBook", () => {
     await book.set("casa", "Rua C, 3");
     expect(await book.get("trabalho")).toBe("Rua B, 2");
     expect(await book.get("casa")).toBe("Rua C, 3");
+  });
+});
+
+describe("LayeredAddressBook", () => {
+  it("prioritizes driver addresses and falls back to base book", async () => {
+    const baseBook = new InProcessAddressBook({ casa: "Base Casa", trabalho: "Base Trabalho" });
+    const layered = new LayeredAddressBook({ casa: "Driver Casa" }, baseBook);
+
+    expect(await layered.get("casa")).toBe("Driver Casa");
+    expect(await layered.get("trabalho")).toBe("Base Trabalho");
+  });
+
+  it("writes to both driver map and base book", async () => {
+    const baseBook = new InProcessAddressBook();
+    const layered = new LayeredAddressBook({}, baseBook);
+
+    await layered.set("casa", "New Casa");
+    expect(await layered.get("casa")).toBe("New Casa");
+    expect(await baseBook.get("casa")).toBe("New Casa");
   });
 });
 

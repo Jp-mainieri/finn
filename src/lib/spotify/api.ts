@@ -23,6 +23,7 @@ export interface SpotifyRequest {
   method?: "GET" | "PUT" | "POST";
   body?: unknown;
   signal?: AbortSignal;
+  refreshToken?: string;
 }
 
 function send(url: string, token: string, { method = "GET", body, signal }: SpotifyRequest) {
@@ -70,10 +71,14 @@ export async function spotifyRequest<T = unknown>(
   const url = pathOrUrl.startsWith("https://") ? pathOrUrl : `${SPOTIFY_API_BASE}${pathOrUrl}`;
   let res: Response;
   try {
-    res = await send(url, await getAccessToken({ signal: req.signal }), req);
+    res = await send(url, await getAccessToken({ signal: req.signal, refreshToken: req.refreshToken }), req);
     if (res.status === 401) {
       await res.body?.cancel().catch(() => {});
-      res = await send(url, await getAccessToken({ forceRefresh: true, signal: req.signal }), req);
+      res = await send(
+        url,
+        await getAccessToken({ forceRefresh: true, signal: req.signal, refreshToken: req.refreshToken }),
+        req,
+      );
     }
   } catch (err) {
     if (err instanceof UserFacingError || req.signal?.aborted) throw err;

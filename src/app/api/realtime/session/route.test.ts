@@ -14,6 +14,7 @@ describe("POST /api/realtime/session", () => {
   beforeEach(() => {
     vi.stubEnv("FINN_API_TOKEN", "s3cret");
     vi.stubEnv("OPENAI_API_KEY", "sk-server-only");
+    vi.stubEnv("ENABLE_GPT_LIVE", "1");
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -27,6 +28,13 @@ describe("POST /api/realtime/session", () => {
   it("requires the Finn bearer token", async () => {
     const res = await POST(req({ sdp: "v=0" }, "wrong"));
     expect(res.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 when GPT-Live-1 is disabled by default", async () => {
+    vi.stubEnv("ENABLE_GPT_LIVE", undefined);
+    const res = await POST(req({ sdp: "v=0 offer" }));
+    expect(res.status).toBe(403);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

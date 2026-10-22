@@ -107,4 +107,30 @@ describe("orchestrate", () => {
     expect(res.results).toEqual([]);
     expect(res.speech).toMatch(/música|lugar/);
   });
+
+  it("uses custom failureSpeech when agent defines it", async () => {
+    const customAgent = {
+      ...fakeAgent("spotify", 500),
+      failureSpeech: "Custom Spotify failure speech.",
+    };
+    const agents = { spotify: customAgent, waze: fakeAgent("waze", 0) };
+    const res = await orchestrate("toca rock", { agents, contextId: "ctx", timeoutMs: 50 });
+    expect(res.results[0]).toMatchObject({
+      agent: "spotify",
+      status: "failed",
+      speech: "Custom Spotify failure speech.",
+    });
+  });
+
+  it("passes driverContext to agent.handle", async () => {
+    const agents = {
+      spotify: fakeAgent("spotify", 0),
+      waze: fakeAgent("waze", 0, { speech: "Indo." }),
+    };
+    const driverContext = { spotifyRefreshToken: "driver-token" };
+    await orchestrate("toca rock", { agents, contextId: "ctx", driverContext });
+    expect(agents.spotify.handle).toHaveBeenCalledWith(
+      expect.objectContaining({ driverContext }),
+    );
+  });
 });

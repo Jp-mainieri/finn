@@ -8,9 +8,10 @@ import {
   SPEAKING_RMS_THRESHOLD,
 } from "./config";
 import { DelegationHandler } from "./delegation-handler";
-import { GptLiveSession } from "./live-session";
+import { getDriverContext, getDriverSettings, saveDictatedAddress } from "./driver-settings";
 import { OrchestratorClient, randomId } from "./orchestrator-client";
 import { isRecoverable, VoiceStateMachine, type VoiceError, type VoiceSnapshot } from "./state-machine";
+import { SttTtsVoiceSession } from "./stt-tts-session";
 import type { TokenStore } from "./token-store";
 import { TranscriptBuffer } from "./transcript-buffer";
 import { UnauthorizedError, type VoiceSession } from "./voice-session";
@@ -59,14 +60,24 @@ export class VoiceController {
   private disposed = false;
 
   constructor(private readonly tokens: TokenStore) {
-    this.orchestrator = new OrchestratorClient({ getToken: () => tokens.get() });
+    this.orchestrator = new OrchestratorClient({
+      getToken: () => tokens.get(),
+      getDriverContext: () => getDriverContext() ?? {},
+    });
     this.delegations = new DelegationHandler({
       transcripts: this.transcripts,
       orchestrator: this.orchestrator,
       speak: (id, text) => this.session?.speak(id, text),
       onWorkStarted: () => this.machine.dispatch({ type: "WORK_STARTED" }),
       onWorkFinished: () => this.machine.dispatch({ type: "WORK_FINISHED" }),
-      onTurn: ({ response }) => this.onActions(toPendingActions(response.clientActions, randomId)),
+      onTurn: ({ response }) => {
+        for (const action of response.clientActions) {
+          if (action.type === "save_address") {
+            saveDictatedAddress(action.label, action.address);
+          }
+        }
+        this.onActions(toPendingActions(response.clientActions, randomId));
+      },
       onFailure: (failure) => {
         if (failure === "unauthorized") this.requireToken();
       },
@@ -244,39 +255,47 @@ export class VoiceController {
     this.captionTurn = "user";
     this.update({ userText: "", assistantText: "" });
 
-    const session: VoiceSession = new GptLiveSession({
-      micTrack: track,
-      micStream: audio.stream,
-      getToken: () => this.tokens.get(),
-      handlers: {
-        onRemoteStream: (stream) => this.session === session && audio.attachRemote(stream),
-        onUserTranscript: (fragment) => {
-          if (this.session !== session) return;
-          this.transcripts.add(fragment);
-          this.caption("user", fragment.delta);
-          this.machine.dispatch({ type: "USER_SPEECH" });
-        },
-        onAssistantTranscript: (fragment) => {
-          if (this.session !== session) return;
-          this.markAssistantSignal();
-          this.caption("assistant", fragment.delta);
-        },
-        onDelegation: (delegation) => {
-          if (this.session === session) void this.delegations.handle(delegation);
-        },
-        onClosed: (reason) => {
-          if (this.session !== session) return;
-          console.info("[voice] session closed:", reason);
-          const { state } = this.machine.current;
-          if (state === "connecting") return; // connect() rejects and reports it
-          if (reason === "connection_lost" && state === "in-conversation") {
-            this.fail({ kind: "session-lost", message: "A conexão caiu. Chame o Finn de novo." });
-          } else {
-            this.machine.dispatch({ type: "CLOSED" });
-          }
-        },
-        onError: (message) => console.warn("[voice] live error:", message),
+    const handlers = {
+      onRemoteStream: (stream: MediaStream) => this.session === session && audio.attachRemote(stream),
+      onUserTranscript: (fragment: import("./transcript-buffer").TranscriptFragment) => {
+        if (this.session !== session) return;
+        this.transcripts.add(fragment);
+        this.caption("user", fragment.delta);
+        this.machine.dispatch({ type: "USER_SPEECH" });
       },
+      onAssistantTranscript: (fragment: import("./transcript-buffer").TranscriptFragment) => {
+        if (this.session !== session) return;
+        this.markAssistantSignal();
+        this.caption("assistant", fragment.delta);
+      },
+      onDelegation: (delegation: import("./voice-session").Delegation) => {
+        if (this.session === session) void this.delegations.handle(delegation);
+      },
+      onClosed: (reason: string) => {
+        if (this.session !== session) return;
+        console.info("[voice] session closed:", reason);
+        const { state } = this.machine.current;
+        if (state === "connecting") return; // connect() rejects and reports it
+        if (reason === "connection_lost" && state === "in-conversation") {
+          this.fail({ kind: "session-lost", message: "A conexão caiu. Chame o Finn de novo." });
+        } else {
+          this.machine.dispatch({ type: "CLOSED" });
+        }
+      },
+      onError: (message: string) => {
+        console.warn("[voice] session error:", message);
+        if (message === "Unauthorized") {
+          this.requireToken();
+          this.fail({ kind: "unauthorized", message: "Token inválido. Configure de novo." });
+        }
+      },
+    };
+
+    const session: VoiceSession = new SttTtsVoiceSession({
+      audio,
+      getToken: () => this.tokens.get(),
+      getTtsMode: () => getDriverSettings().ttsMode,
+      handlers,
     });
     this.session = session;
 
@@ -364,7 +383,9 @@ export class VoiceController {
 
   private tick(): void {
     const now = Date.now();
-    if ((this.audio?.remoteLevel() ?? 0) > SPEAKING_RMS_THRESHOLD) this.markAssistantSignal();
+    const isSpeaking =
+      (this.audio?.remoteLevel() ?? 0) > SPEAKING_RMS_THRESHOLD || Boolean(this.session?.isSpeaking?.());
+    if (isSpeaking) this.markAssistantSignal();
     else if (now - this.lastAssistantSignal > SPEAKING_HOLD_MS) this.machine.dispatch({ type: "ASSISTANT_QUIET" });
 
     const pending = this.autoOpen;

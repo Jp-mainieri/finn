@@ -7,10 +7,10 @@
  * to Live-1 as the delegation result so it is spoken to the driver.
  */
 
-import type { AgentResult, Continuation } from "./a2a";
+import type { AgentResult, Continuation, DriverContext } from "./a2a";
 
 /** Something the backend can't do itself and the PWA must do on the phone. */
-export type ClientAction = OpenUrlAction;
+export type ClientAction = OpenUrlAction | SaveAddressAction;
 
 export interface OpenUrlAction {
   type: "open_url";
@@ -20,12 +20,20 @@ export interface OpenUrlAction {
   label?: string;
 }
 
+export interface SaveAddressAction {
+  type: "save_address";
+  label: "casa" | "trabalho";
+  address: string;
+}
+
 export interface OrchestratorRequest {
   transcript: string;
   /** Stable id for the current Live-1 conversation window; used as A2A contextId. */
   contextId?: string;
   /** Echo of the previous response's `continuation`, if any (within the same conversation window). */
   continuation?: Continuation;
+  /** Optional per-driver context (saved addresses, Spotify token) for multi-user support. */
+  driverContext?: DriverContext;
 }
 
 export interface OrchestratorResponse {

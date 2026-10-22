@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { isRecoverable } from "@/lib/voice/state-machine";
 import { statusText, wakeWordNotice, type StatusTone } from "@/lib/voice/status";
 import type { VoiceController, VoiceView } from "@/lib/voice/voice-controller";
+import { DriverSettingsModal } from "./DriverSettingsModal";
 
 const TONE_CLASS: Record<StatusTone, string> = {
   idle: "text-foreground",
@@ -15,6 +17,7 @@ const TONE_CLASS: Record<StatusTone, string> = {
 const BIG_BUTTON = "min-h-24 w-full rounded-3xl px-6 text-2xl font-semibold transition-transform active:scale-[0.98]";
 
 export function TripScreen({ view, controller }: { view: VoiceView; controller: VoiceController }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const { voice } = view;
   const wakeReady = view.wakeWord?.available === true;
   const status = statusText(voice, wakeReady);
@@ -34,6 +37,12 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
               Encerrar viagem
             </button>
           )}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="min-h-12 rounded-full border border-border px-4 text-base text-muted"
+          >
+            Configurações
+          </button>
           <button
             onClick={() => {
               if (window.confirm("Apagar o token salvo neste aparelho?")) controller.resetToken();
@@ -118,6 +127,8 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
           Falar com o Finn
         </button>
       )}
+
+      <DriverSettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

@@ -7,6 +7,7 @@ import type {
 import type { ClientAction } from "@/lib/contracts/client-events";
 import type { ChatMessage, NeuralakeClient } from "@/lib/contracts/neuralake";
 import type { ToolSchema } from "@/lib/contracts/tools";
+import { optionalEnv } from "@/lib/env";
 
 /** What a tool executor returns to the runtime. */
 export interface ToolOutput {
@@ -50,6 +51,8 @@ export interface ToolLoopOptions {
   maxSteps?: number;
   /** Spoken when something unexpected fails. */
   fallbackErrorSpeech?: string;
+  /** Synthesizes confirmation speech directly to skip the 2nd LLM round-trip when FINN_FAST_SPEECH=1. */
+  fastSpeech?: (toolName: string, result: unknown) => string | null;
 }
 
 /**
@@ -118,7 +121,13 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<AgentResult> {
         }
         toolCalls.push({ name: call.function.name, arguments: args, result: output.result, ok: true });
         for (const action of output.clientActions ?? []) {
-          if (!clientActions.some((a) => a.type === action.type && a.url === action.url)) {
+          const isDuplicate = clientActions.some((a) => {
+            if (a.type !== action.type) return false;
+            if (a.type === "open_url" && action.type === "open_url") return a.url === action.url;
+            if (a.type === "save_address" && action.type === "save_address") return a.label === action.label;
+            return false;
+          });
+          if (!isDuplicate) {
             clientActions.push(action);
           }
         }
@@ -130,6 +139,23 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<AgentResult> {
           tool_call_id: call.id,
           content: JSON.stringify(output.result),
         });
+      }
+
+      if (
+        optionalEnv("FINN_FAST_SPEECH", "0") === "1" &&
+        step === 0 &&
+        !inputRequired &&
+        opts.fastSpeech &&
+        message.tool_calls.length > 0
+      ) {
+        const lastCall = message.tool_calls[message.tool_calls.length - 1];
+        const lastInvocation = toolCalls[toolCalls.length - 1];
+        if (lastInvocation?.ok) {
+          const fast = opts.fastSpeech(lastCall.function.name, lastInvocation.result);
+          if (fast) {
+            return result("completed", fast);
+          }
+        }
       }
     }
     return result("failed", fallbackErrorSpeech);

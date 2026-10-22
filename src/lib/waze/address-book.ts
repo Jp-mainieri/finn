@@ -39,6 +39,30 @@ export class InProcessAddressBook implements AddressBook {
   }
 }
 
+/**
+ * Layers per-driver saved addresses (e.g. from mobile device) over a base address book.
+ * Writes are written to both the driver-local store and the base book.
+ */
+export class LayeredAddressBook implements AddressBook {
+  private readonly driverAddresses: Map<SavedLabel, string>;
+
+  constructor(
+    driverSeed: Partial<Record<SavedLabel, string>> = {},
+    private readonly baseBook: AddressBook = getAddressBook(),
+  ) {
+    this.driverAddresses = new Map(Object.entries(driverSeed) as [SavedLabel, string][]);
+  }
+
+  async get(label: SavedLabel): Promise<string | undefined> {
+    return this.driverAddresses.get(label) ?? this.baseBook.get(label);
+  }
+
+  async set(label: SavedLabel, address: string): Promise<void> {
+    this.driverAddresses.set(label, address);
+    await this.baseBook.set(label, address);
+  }
+}
+
 /** Parses `WAZE_SAVED_ADDRESSES`; invalid JSON or entries are logged and ignored. */
 export function parseSavedAddresses(raw: string): Partial<Record<SavedLabel, string>> {
   if (!raw.trim()) return {};

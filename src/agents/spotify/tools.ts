@@ -12,7 +12,7 @@ const playlistsByTurn = new WeakMap<AgentTaskInput, Promise<Playlist[]>>();
 function playlistsFor(input: AgentTaskInput): Promise<Playlist[]> {
   let pending = playlistsByTurn.get(input);
   if (!pending) {
-    pending = listPlaylists(input.signal);
+    pending = listPlaylists(input.signal, input.driverContext?.spotifyRefreshToken);
     // Don't memoize failures: a retry within the turn should hit the API again.
     pending.catch(() => playlistsByTurn.delete(input));
     playlistsByTurn.set(input, pending);
@@ -36,7 +36,7 @@ export const spotifyExecutors: Record<string, ToolExecutor> = {
       };
     }
     const { id, name } = match.item;
-    await playContext(playlistUri(id), input.signal);
+    await playContext(playlistUri(id), input.signal, input.driverContext?.spotifyRefreshToken);
     return { result: { found: true, playlist: { id, name } } };
   },
 
@@ -45,7 +45,7 @@ export const spotifyExecutors: Record<string, ToolExecutor> = {
     if (!PLAYBACK_ACTIONS.includes(action)) {
       return { result: { ok: false, error: `action must be one of ${PLAYBACK_ACTIONS.join(", ")}` } };
     }
-    await controlPlayback(action, input.signal);
+    await controlPlayback(action, input.signal, input.driverContext?.spotifyRefreshToken);
     return { result: { ok: true, action } };
   },
 };

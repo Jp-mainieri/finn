@@ -5,7 +5,7 @@ import { MockNeuralakeClient, textMessage, toolCallMessage, type MockScript } fr
 import { NO_DEVICE_SPEECH } from "@/lib/spotify/api";
 import { AUTH_FAILED_SPEECH, NOT_CONFIGURED_SPEECH, resetSpotifyTokenCache } from "@/lib/spotify/auth";
 import { API, createFakeSpotify, spotifyError, stubSpotifyEnv, type FakeSpotifyOptions } from "@/lib/spotify/testing";
-import { spotifyAgent } from ".";
+import { spotifyAgent, spotifyFastSpeech } from ".";
 
 const holder = vi.hoisted(() => ({ client: undefined as unknown }));
 vi.mock("@/lib/neuralake/client", () => ({ getNeuralakeClient: () => holder.client }));
@@ -246,5 +246,21 @@ describe("spotifyAgent card", () => {
       expect(skill.tags.length).toBeGreaterThan(0);
       expect(skill.examples?.length).toBeGreaterThan(0);
     }
+  });
+
+  it("exposes keywords and failureSpeech", () => {
+    expect(spotifyAgent.keywords).toBeDefined();
+    expect(spotifyAgent.failureSpeech).toBe("Não consegui mexer na música agora.");
+  });
+
+  it("synthesizes deterministic fastSpeech confirmation", () => {
+    expect(
+      spotifyFastSpeech("play_playlist", { found: true, playlist: { name: "Rock Nacional" } }),
+    ).toBe("Tocando Rock Nacional.");
+    expect(spotifyFastSpeech("play_playlist", { found: false })).toBeNull();
+    expect(spotifyFastSpeech("toggle_playback", { ok: true, action: "pause" })).toBe("Música pausada.");
+    expect(spotifyFastSpeech("toggle_playback", { ok: true, action: "play" })).toBe("Continuando a música.");
+    expect(spotifyFastSpeech("toggle_playback", { ok: true, action: "skip" })).toBe("Próxima música.");
+    expect(spotifyFastSpeech("list_playlists", { playlists: [] })).toBeNull();
   });
 });

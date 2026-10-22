@@ -41,7 +41,7 @@ function navigate(address: string, target: string, result: NavigateResult): Tool
 export function createNavigateTo(book: AddressBook, continuation?: WazeContinuation): ToolExecutor {
   let pendingLabel = continuation && "pendingLabel" in continuation ? continuation.pendingLabel : undefined;
 
-  return async (args) => {
+  return async (args, input) => {
     const destination =
       typeof args.destination === "string" ? args.destination.replace(/\s+/g, " ").trim() : "";
     if (!destination) {
@@ -55,11 +55,18 @@ export function createNavigateTo(book: AddressBook, continuation?: WazeContinuat
       const answered = pendingLabel;
       pendingLabel = undefined;
       await book.set(answered, destination);
-      return navigate(destination, LABEL_TEXT[answered], {
+      const out = navigate(destination, LABEL_TEXT[answered], {
         navigating_to: answered,
         saved_place: true,
         address_saved_now: true,
       });
+      if (input.driverContext) {
+        out.clientActions = [
+          ...(out.clientActions ?? []),
+          { type: "save_address", label: answered, address: destination },
+        ];
+      }
+      return out;
     }
 
     if (label) {

@@ -22,6 +22,7 @@ export class AudioIO {
   private mic: MediaStream | null = null;
   private worklet: AudioWorkletNode | null = null;
   private frameSink: ((frame: Int16Array) => void) | null = null;
+  private sessionFrameSink: ((frame: Int16Array) => void) | null = null;
   private remoteAnalyser: AnalyserNode | null = null;
   private remoteSource: MediaStreamAudioSourceNode | null = null;
   private readonly levelBuffer = new Float32Array(1024);
@@ -70,7 +71,10 @@ export class AudioIO {
       numberOfOutputs: 1,
       processorOptions: { frameLength: 512 },
     });
-    this.worklet.port.onmessage = (event: MessageEvent<Int16Array>) => this.frameSink?.(event.data);
+    this.worklet.port.onmessage = (event: MessageEvent<Int16Array>) => {
+      this.frameSink?.(event.data);
+      this.sessionFrameSink?.(event.data);
+    };
     // Keep the worklet pulled by the graph without making any sound.
     const mute = this.context.createGain();
     mute.gain.value = 0;
@@ -78,12 +82,24 @@ export class AudioIO {
     return this.mic;
   }
 
+  private updateWorkletState(): void {
+    if (!this.worklet) return;
+    const active = Boolean(this.frameSink || this.sessionFrameSink);
+    this.worklet.port.postMessage({ command: active ? "enable" : "disable" });
+  }
+
   /** Routes 16 kHz Int16 frames to `sink` (Porcupine) or stops posting them when null. */
   setFrameSink(sink: ((frame: Int16Array) => void) | null, frameLength?: number): void {
     this.frameSink = sink;
     if (!this.worklet) return;
     if (frameLength) this.worklet.port.postMessage({ command: "configure", frameLength });
-    this.worklet.port.postMessage({ command: sink ? "enable" : "disable" });
+    this.updateWorkletState();
+  }
+
+  /** Routes 16 kHz Int16 frames to the active conversation voice session (SttTtsVoiceSession). */
+  setSessionFrameSink(sink: ((frame: Int16Array) => void) | null): void {
+    this.sessionFrameSink = sink;
+    this.updateWorkletState();
   }
 
   /** Plays the assistant's WebRTC audio and measures its level for silence detection. */
@@ -142,6 +158,7 @@ export class AudioIO {
 
   release(): void {
     this.frameSink = null;
+    this.sessionFrameSink = null;
     this.worklet?.port.postMessage({ command: "disable" });
     this.worklet?.disconnect();
     this.worklet = null;

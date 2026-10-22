@@ -1,6 +1,6 @@
 import { expect } from "vitest";
 import type { AgentId, AgentResult } from "@/lib/contracts/a2a";
-import type { OpenUrlAction, OrchestratorResponse } from "@/lib/contracts/client-events";
+import type { ClientAction, OpenUrlAction, OrchestratorResponse } from "@/lib/contracts/client-events";
 
 /** Things the driver must never hear (spec: "sem tecnicismo"). */
 export const TECHNICAL_TERMS: RegExp[] = [
@@ -37,8 +37,12 @@ export function expectAgentResult(value: unknown, agent?: AgentId): asserts valu
   expect(r.speech).toBeTypeOf("string");
   expect(Array.isArray(r.clientActions)).toBe(true);
   for (const a of r.clientActions) {
-    expect(a.type).toBe("open_url");
-    expect(a.url).toBeTypeOf("string");
+    if (a.type === "open_url") {
+      expect(a.url).toBeTypeOf("string");
+    } else if (a.type === "save_address") {
+      expect(a.address).toBeTypeOf("string");
+      expect(["casa", "trabalho"]).toContain(a.label);
+    }
   }
   expect(Array.isArray(r.toolCalls)).toBe(true);
   for (const c of r.toolCalls) {
@@ -62,8 +66,10 @@ export function expectOrchestratorResponse(value: unknown): asserts value is Orc
 export const wazeUrl = (destination: string): string =>
   `https://waze.com/ul?q=${encodeURIComponent(destination)}&navigate=yes`;
 
-export function openUrls(res: { clientActions: OpenUrlAction[] }): string[] {
-  return res.clientActions.filter((a) => a.type === "open_url").map((a) => a.url);
+export function openUrls(res: { clientActions: ClientAction[] }): string[] {
+  return res.clientActions
+    .filter((a): a is OpenUrlAction => a.type === "open_url")
+    .map((a) => a.url);
 }
 
 export function resultOf(res: OrchestratorResponse, agent: AgentId): AgentResult {

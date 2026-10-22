@@ -124,4 +124,24 @@ describe("OrchestratorClient", () => {
       vi.useRealTimers();
     }
   });
+
+  it("includes driverContext when configured and non-empty", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => json(navigating));
+    const client = new OrchestratorClient({
+      getToken: () => "t",
+      fetchImpl,
+      getDriverContext: () => ({
+        spotifyRefreshToken: "sp-tok",
+        savedAddresses: { casa: "Rua A, 1" },
+      }),
+    });
+
+    await client.send("me leva pra casa");
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse(init?.body as string);
+    expect(body.driverContext).toEqual({
+      spotifyRefreshToken: "sp-tok",
+      savedAddresses: { casa: "Rua A, 1" },
+    });
+  });
 });

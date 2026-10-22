@@ -5,7 +5,7 @@ import { WAZE_TOOLS } from "@/lib/contracts/tools";
 import { MockNeuralakeClient, textMessage, toolCallMessage, type MockScript } from "@/lib/neuralake/mock";
 import { getAddressBook, resetAddressBook } from "@/lib/waze/address-book";
 import { orchestrate } from "@/orchestrator/orchestrate";
-import { wazeAgent } from "./index";
+import { wazeAgent, wazeFastSpeech } from "./index";
 
 const mocks = vi.hoisted(() => ({ client: undefined as NeuralakeClient | undefined }));
 vi.mock("@/lib/neuralake/client", () => ({
@@ -205,5 +205,60 @@ describe("wazeAgent through the orchestrator", () => {
         label: "Navegar para casa",
       },
     ]);
+  });
+
+  it("prioritizes driverContext.savedAddresses for multi-user", async () => {
+    vi.stubEnv("WAZE_SAVED_ADDRESSES", JSON.stringify({ casa: "Env Casa" }));
+    resetAddressBook();
+    useModel(navigateScript("casa"));
+    const res = await wazeAgent.handle({
+      transcript: "me leva pra casa",
+      contextId: "ctx",
+      driverContext: { savedAddresses: { casa: "Custom Driver Casa" } },
+    });
+    expect(res.status).toBe("completed");
+    expect(res.clientActions).toEqual([
+      {
+        type: "open_url",
+        url: "https://waze.com/ul?q=Custom%20Driver%20Casa&navigate=yes",
+        label: "Navegar para casa",
+      },
+    ]);
+  });
+
+  it("emits save_address clientAction when driverContext is provided", async () => {
+    useModel(navigateScript("Rua Oscar Freire, 100"));
+    const res = await wazeAgent.handle({
+      transcript: "Rua Oscar Freire, 100",
+      contextId: "ctx",
+      continuation: { pendingLabel: "casa" },
+      driverContext: {},
+    });
+    expect(res.status).toBe("completed");
+    expect(res.clientActions).toEqual([
+      {
+        type: "open_url",
+        url: "https://waze.com/ul?q=Rua%20Oscar%20Freire%2C%20100&navigate=yes",
+        label: "Navegar para casa",
+      },
+      {
+        type: "save_address",
+        label: "casa",
+        address: "Rua Oscar Freire, 100",
+      },
+    ]);
+  });
+
+  it("exposes keywords and failureSpeech", () => {
+    expect(wazeAgent.keywords).toBeDefined();
+    expect(wazeAgent.failureSpeech).toBe("Não consegui abrir a navegação agora.");
+  });
+
+  it("synthesizes deterministic fastSpeech confirmation", () => {
+    expect(wazeFastSpeech("navigate_to", { navigating_to: "casa" })).toBe(
+      "Abrindo a rota para casa.",
+    );
+    expect(wazeFastSpeech("navigate_to", { needs_address: "casa" })).toBeNull();
+    expect(wazeFastSpeech("other_tool", {})).toBeNull();
   });
 });

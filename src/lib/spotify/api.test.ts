@@ -230,4 +230,38 @@ describe("Spotify operations", () => {
     const calls = fake.calls.filter((c) => c.url.startsWith(API));
     expect(calls).toEqual([expect.objectContaining({ method, url, body: null })]);
   });
+
+  describe("multi-user custom refresh token", () => {
+    it("requests token with custom refreshToken and caches it", async () => {
+      const fake = install();
+      const { getAccessToken } = await import("./auth");
+
+      const token1 = await getAccessToken({ refreshToken: "custom-driver-token" });
+      expect(token1).toBeTypeOf("string");
+
+      // Verify the POST to token endpoint used custom-driver-token
+      const tokenCalls = fake.find("POST", TOKEN_URL);
+      expect(tokenCalls).toHaveLength(1);
+      expect(tokenCalls[0].body).toContain("refresh_token=custom-driver-token");
+
+      // Second call reuses cached token (no second network call)
+      const token2 = await getAccessToken({ refreshToken: "custom-driver-token" });
+      expect(token2).toBe(token1);
+      expect(fake.find("POST", TOKEN_URL)).toHaveLength(1);
+
+      // resetSpotifyTokenCache clears custom cache
+      resetSpotifyTokenCache();
+      const token3 = await getAccessToken({ refreshToken: "custom-driver-token" });
+      expect(token3).toBeTypeOf("string");
+      expect(fake.find("POST", TOKEN_URL)).toHaveLength(2);
+    });
+
+    it("passes custom refreshToken down to spotifyRequest", async () => {
+      const fake = install();
+      await spotifyRequest("/me/player/pause", { method: "PUT", refreshToken: "user-456-token" });
+      const tokenCalls = fake.find("POST", TOKEN_URL);
+      expect(tokenCalls).toHaveLength(1);
+      expect(tokenCalls[0].body).toContain("refresh_token=user-456-token");
+    });
+  });
 });

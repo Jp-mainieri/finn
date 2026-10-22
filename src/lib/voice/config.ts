@@ -62,4 +62,14 @@ export const PCM_WORKLET_PATH = "/voice/pcm-frame-processor.js";
 
 export const ORCHESTRATOR_PATH = "/api/orchestrator";
 export const LIVE_SESSION_PATH = "/api/realtime/session";
+export const TRANSCRIBE_PATH = "/api/realtime/transcribe";
+export const TTS_PATH = "/api/realtime/tts";
 export const TOKEN_STORAGE_KEY = "finn.apiToken";
+export const DRIVER_SETTINGS_STORAGE_KEY = "finn.driverSettings";
+
+// --- STT / TTS & VAD Tunables ------------------------------------------------
+export const VAD_SPEECH_THRESHOLD = 0.018;
+export const VAD_SILENCE_MS = 900;
+export const MAX_UTTERANCE_MS = 12_000;
+export const MIN_SPEECH_MS = 300;
+

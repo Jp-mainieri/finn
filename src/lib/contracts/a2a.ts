@@ -17,6 +17,13 @@ export const AGENT_IDS: readonly AgentId[] = ["spotify", "waze"] as const;
 // In-process contract (what each agent implements)
 // ---------------------------------------------------------------------------
 
+export interface DriverContext {
+  /** Optional per-user Spotify refresh token (encrypted or raw from client setup), overriding SPOTIFY_REFRESH_TOKEN. */
+  spotifyRefreshToken?: string;
+  /** Optional per-user saved addresses from the driver's device, merged with WAZE_SAVED_ADDRESSES. */
+  savedAddresses?: Partial<Record<"casa" | "trabalho", string>>;
+}
+
 export interface AgentTaskInput {
   /** Full driver transcript for the turn. Agents ignore parts outside their domain. */
   transcript: string;
@@ -30,6 +37,8 @@ export interface AgentTaskInput {
    * for the full address of "casa" and this turn carries the answer).
    */
   continuation?: unknown;
+  /** Optional per-driver context for multi-user support. */
+  driverContext?: DriverContext;
 }
 
 /** Pending follow-up owned by one agent, round-tripped through the PWA. */
@@ -68,6 +77,10 @@ export interface AgentResult {
 
 export interface Agent {
   id: AgentId;
+  /** Optional keyword regexes for fast local triage routing. */
+  keywords?: readonly RegExp[];
+  /** Optional fallback spoken sentence when the agent times out or crashes. */
+  failureSpeech?: string;
   card(baseUrl: string): AgentCard;
   handle(input: AgentTaskInput): Promise<AgentResult>;
 }

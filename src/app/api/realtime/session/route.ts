@@ -20,6 +20,13 @@ export async function POST(request: Request) {
   const denied = authorize(request);
   if (denied) return denied;
 
+  if (optionalEnv("ENABLE_GPT_LIVE", "0") !== "1") {
+    return Response.json(
+      { error: "GPT-Live-1 está temporariamente desativado (Em breve)." },
+      { status: 403 },
+    );
+  }
+
   let sdp: unknown;
   try {
     ({ sdp } = await request.json());

@@ -104,6 +104,7 @@ export class SttTtsVoiceSession implements VoiceSession {
   private transcribing = false;
   private isRecording = false;
   private speechFramesCount = 0;
+  private bargeInFrames = 0;
   private startTime = 0;
   private speechStartMs = 0;
   private lastSpeechMs = 0;
@@ -135,16 +136,31 @@ export class SttTtsVoiceSession implements VoiceSession {
   processFrame(frame: Int16Array): void {
     if (!this.connected || this.closed) return;
 
-    // While the assistant is speaking, ignore mic frames in the real browser so the iPhone
-    // speaker/mic never triggers self-interruption or cancels TTS playback.
-    if (this.speaking) {
-      if (this.options.fetchImpl && computeFrameRms(frame) > 0.08) {
-        this.stopSpeaking();
-      }
-      return;
-    }
-
     const rms = computeFrameRms(frame);
+
+    // Full-duplex barge-in (replicating GPT-Live-1 server_vad):
+    // Mic stays open while Finn speaks. A single 32ms plosive spike (like the "B" in "Bom dia")
+    // is ignored, while sustained user speech (~320ms = 10 frames > 0.12 RMS) interrupts Finn
+    // and immediately begins capturing the user's new utterance.
+    if (this.speaking) {
+      if (this.options.fetchImpl) {
+        if (rms > 0.08) this.stopSpeaking();
+        return;
+      }
+      if (rms > 0.12) {
+        this.bargeInFrames += 1;
+        if (this.bargeInFrames >= 10) {
+          this.bargeInFrames = 0;
+          this.stopSpeaking();
+          // Fall through so this frame immediately starts recording the user's interruption
+        } else {
+          return;
+        }
+      } else {
+        this.bargeInFrames = 0;
+        return;
+      }
+    }
 
     // Ignore mic frames while an utterance is currently being transcribed
     // so ambient noise doesn't overwrite captions or start a phantom turn.
@@ -365,36 +381,19 @@ export class SttTtsVoiceSession implements VoiceSession {
   private activeBufferSource: AudioBufferSourceNode | null = null;
   private activeUtterance: SpeechSynthesisUtterance | null = null;
 
-  private setMicEnabled(enabled: boolean): void {
-    try {
-      const track = this.options.audio.micTrack;
-      if (track) track.enabled = enabled;
-    } catch {
-      // ignore
-    }
-  }
-
   private beginSpeakingState(): void {
     this.speaking = true;
+    this.bargeInFrames = 0;
     this.isRecording = false;
     this.speechFramesCount = 0;
     this.recordedChunks = [];
     this.turnPcmChunks = [];
     this.preroll = [];
-    if (!this.options.fetchImpl) {
-      this.setMicEnabled(false);
-    }
   }
 
   private endSpeakingState(): void {
     this.speaking = false;
-    if (!this.options.fetchImpl) {
-      setTimeout(() => {
-        if (!this.speaking && !this.closed) {
-          this.setMicEnabled(true);
-        }
-      }, 150);
-    }
+    this.bargeInFrames = 0;
   }
 
   private async playOpenAiTts(text: string): Promise<void> {

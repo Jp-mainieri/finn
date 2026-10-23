@@ -135,18 +135,16 @@ export class SttTtsVoiceSession implements VoiceSession {
   processFrame(frame: Int16Array): void {
     if (!this.connected || this.closed) return;
 
-    const rms = computeFrameRms(frame);
-
-    // If assistant is currently speaking:
-    // If user produces loud speech (> 0.08), barge-in: stop assistant speaking.
-    // Otherwise, ignore mic to prevent echo / self-triggering.
+    // While the assistant is speaking, ignore mic frames in the real browser so the iPhone
+    // speaker/mic never triggers self-interruption or cancels TTS playback.
     if (this.speaking) {
-      if (rms > 0.08) {
+      if (this.options.fetchImpl && computeFrameRms(frame) > 0.08) {
         this.stopSpeaking();
-      } else {
-        return;
       }
+      return;
     }
+
+    const rms = computeFrameRms(frame);
 
     // Ignore mic frames while an utterance is currently being transcribed
     // so ambient noise doesn't overwrite captions or start a phantom turn.
@@ -339,9 +337,24 @@ export class SttTtsVoiceSession implements VoiceSession {
       endMs: now + 100,
     });
 
-    const mode = this.options.getTtsMode?.() ?? "native";
-    if (mode === "openai") {
-      this.playOpenAiTts(text).catch(() => this.playNativeTts(text));
+    // In the real browser (especially iOS Safari where speechSynthesis is muted while
+    // getUserMedia is active), always prefer OpenAI TTS via WebAudio/HTMLAudioElement,
+    // falling back to native speechSynthesis only if /api/realtime/tts fails or in unit tests.
+    const mode = this.options.getTtsMode?.() ?? (this.options.fetchImpl ? "native" : "openai");
+    if (mode === "openai" || !this.options.fetchImpl) {
+      this.speaking = true;
+      this.playOpenAiTts(text).catch((err) => {
+        console.warn("[voice-session] OpenAI TTS failed, falling back to native TTS", err);
+        const msg = err instanceof Error ? err.message : "erro";
+        if (!this.options.fetchImpl) {
+          this.options.handlers.onAssistantTranscript({
+            delta: ` (${msg})`,
+            startMs: this.sessionOffsetMs(),
+            endMs: this.sessionOffsetMs(),
+          });
+        }
+        this.playNativeTts(text);
+      });
     } else {
       this.playNativeTts(text);
     }
@@ -352,6 +365,7 @@ export class SttTtsVoiceSession implements VoiceSession {
   private activeBufferSource: AudioBufferSourceNode | null = null;
 
   private async playOpenAiTts(text: string): Promise<void> {
+    this.speaking = true;
     const token = this.options.getToken();
     const res = await this.fetchImpl(TTS_PATH, {
       method: "POST",
@@ -362,21 +376,32 @@ export class SttTtsVoiceSession implements VoiceSession {
       body: JSON.stringify({ text }),
     });
 
-    if (!res.ok) throw new Error("TTS upstream error");
+    if (!res.ok) throw new Error(`TTS HTTP ${res.status}`);
 
     const ab = await res.arrayBuffer();
+    if (this.closed) {
+      this.speaking = false;
+      return;
+    }
+
     const ctx = this.options.audio.context;
 
-    // Prefer playing through the already-unlocked Web Audio AudioContext (same pipeline as earcon beep)
+    // 1. Prefer playing through the already-unlocked Web Audio AudioContext (same pipeline as earcon beep)
     if (ctx && typeof ctx.decodeAudioData === "function") {
       try {
         await this.options.audio.resume?.();
         const audioBuffer = await ctx.decodeAudioData(ab.slice(0));
+        if (this.closed) {
+          this.speaking = false;
+          return;
+        }
         this.speaking = true;
         await new Promise<void>((resolve) => {
           const source = ctx.createBufferSource();
+          const gain = ctx.createGain();
+          gain.gain.value = 1.4;
           source.buffer = audioBuffer;
-          source.connect(ctx.destination);
+          source.connect(gain).connect(ctx.destination);
           this.activeBufferSource = source;
           source.onended = () => {
             if (this.activeBufferSource === source) this.activeBufferSource = null;
@@ -391,6 +416,7 @@ export class SttTtsVoiceSession implements VoiceSession {
       }
     }
 
+    // 2. Fallback: gesture-unlocked HTMLAudioElement (never listen to 'pause' before setting src!)
     const blob = new Blob([ab], { type: "audio/mpeg" });
     const url = URL.createObjectURL(blob);
     const audio = this.options.audio.output;
@@ -404,15 +430,13 @@ export class SttTtsVoiceSession implements VoiceSession {
         settled = true;
         audio.removeEventListener("ended", finish);
         audio.removeEventListener("error", finish);
-        audio.removeEventListener("pause", finish);
         URL.revokeObjectURL(url);
         this.speaking = false;
         resolve();
       };
+      audio.src = url;
       audio.addEventListener("ended", finish, { once: true });
       audio.addEventListener("error", finish, { once: true });
-      audio.addEventListener("pause", finish, { once: true });
-      audio.src = url;
       void audio.play().catch(finish);
     });
   }

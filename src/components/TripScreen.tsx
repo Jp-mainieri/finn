@@ -16,7 +16,7 @@ const TONE_CLASS: Record<StatusTone, string> = {
 
 const BIG_BUTTON = "min-h-24 w-full rounded-3xl px-6 text-2xl font-semibold transition-transform active:scale-[0.98]";
 
-export const FINN_UI_VERSION = "v0.5.0-neuralake-greeting";
+export const FINN_UI_VERSION = "v0.5.1-audio-fix";
 
 export function TripScreen({ view, controller }: { view: VoiceView; controller: VoiceController }) {
   const [settingsOpen, setSettingsOpen] = useState(false);

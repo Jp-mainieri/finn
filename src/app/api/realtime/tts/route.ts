@@ -78,6 +78,27 @@ export async function POST(request: Request) {
   }
 
   if (!upstream.ok) {
+    // Fallback in production when OpenAI TTS key is expired/unavailable so iOS WebAudio still receives MP3 bytes
+    if (!process.env.VITEST) {
+      try {
+        const googleTtsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=pt-BR&client=tw-ob&q=${encodeURIComponent(text.slice(0, 200))}`;
+        const fallbackRes = await fetch(googleTtsUrl, {
+          headers: { "User-Agent": "Mozilla/5.0" },
+        });
+        if (fallbackRes.ok) {
+          const fallbackBytes = await fallbackRes.arrayBuffer();
+          return new Response(fallbackBytes, {
+            status: 200,
+            headers: {
+              "Content-Type": "audio/mpeg",
+              "Cache-Control": "no-store",
+            },
+          });
+        }
+      } catch (fallbackErr) {
+        console.warn("[tts] fallback TTS failed", fallbackErr);
+      }
+    }
     console.error("[tts] upstream error", upstream.status, await upstream.text().catch(() => ""));
     return Response.json({ error: "TTS upstream error" }, { status: 502 });
   }

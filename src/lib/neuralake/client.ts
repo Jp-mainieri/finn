@@ -18,6 +18,7 @@ export class NeuralakeHttpError extends Error {
 
 export class HttpNeuralakeClient implements NeuralakeClient {
   private readonly cleanBaseUrl: string;
+  private primaryCooldownUntil = 0;
 
   constructor(
     private readonly apiKey: string,
@@ -38,7 +39,20 @@ export class HttpNeuralakeClient implements NeuralakeClient {
     // memory mechanism once confirmed in the Neuralake dashboard. Until then
     // it is intentionally not sent.
 
+    const isTest = Boolean(process.env.VITEST);
+
     try {
+      if (!isTest && Date.now() < this.primaryCooldownUntil) {
+        throw new NeuralakeHttpError(429, "Primary Neuralake in cooldown");
+      }
+
+      const primarySignal =
+        !isTest && typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
+          ? req.signal
+            ? AbortSignal.any([req.signal, AbortSignal.timeout(2500)])
+            : AbortSignal.timeout(2500)
+          : req.signal;
+
       const res = await fetch(`${this.cleanBaseUrl}/chat/completions`, {
         method: "POST",
         headers: {
@@ -46,7 +60,7 @@ export class HttpNeuralakeClient implements NeuralakeClient {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
-        signal: req.signal,
+        signal: primarySignal,
       });
       if (!res.ok) throw new NeuralakeHttpError(res.status, await res.text());
 
@@ -59,56 +73,87 @@ export class HttpNeuralakeClient implements NeuralakeClient {
         message: {
           role: "assistant",
           content: choice.message.content ?? null,
-          tool_calls: choice.message.tool_calls,
+          ...(choice.message.tool_calls?.length ? { tool_calls: choice.message.tool_calls } : {}),
         },
         finishReason: choice.finish_reason ?? null,
       };
     } catch (primaryErr) {
       // In unit/acceptance tests, never fall back so tests can assert NeuralakeHttpError behavior.
-      if (process.env.VITEST) throw primaryErr;
+      if (isTest) throw primaryErr;
 
+      this.primaryCooldownUntil = Date.now() + 120_000;
       console.warn("[neuralake] primary endpoint failed, attempting LLM fallback:", primaryErr);
-      const openaiKey = process.env.OPENAI_API_KEY?.trim();
+
       const groqKey = process.env.GROQ_API_KEY?.trim();
-      const fallbackUrl = openaiKey
-        ? "https://api.openai.com/v1/chat/completions"
-        : groqKey
-          ? "https://api.groq.com/openai/v1/chat/completions"
-          : null;
-      const fallbackKey = openaiKey || groqKey;
-      const fallbackModel = openaiKey ? "gpt-4o-mini" : "llama-3.3-70b-versatile";
+      const openaiKey = process.env.OPENAI_API_KEY?.trim();
 
-      if (!fallbackUrl || !fallbackKey) throw primaryErr;
+      const providers: Array<{ name: string; url: string; key: string; model: string }> = [];
+      if (groqKey) {
+        providers.push({
+          name: "groq-llama-3.3-70b",
+          url: "https://api.groq.com/openai/v1/chat/completions",
+          key: groqKey,
+          model: "llama-3.3-70b-versatile",
+        });
+        providers.push({
+          name: "groq-llama-3.1-8b",
+          url: "https://api.groq.com/openai/v1/chat/completions",
+          key: groqKey,
+          model: "llama-3.1-8b-instant",
+        });
+      }
+      if (openaiKey) {
+        providers.push({
+          name: "openai-gpt-4o-mini",
+          url: "https://api.openai.com/v1/chat/completions",
+          key: openaiKey,
+          model: "gpt-4o-mini",
+        });
+      }
 
-      const fallbackBody: Record<string, unknown> = {
-        model: fallbackModel,
-        messages: req.messages,
-        stream: false,
-      };
-      if (req.tools?.length) fallbackBody.tools = req.tools;
+      if (providers.length === 0) throw primaryErr;
 
-      const res = await fetch(fallbackUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${fallbackKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(fallbackBody),
-        signal: req.signal,
-      });
-      if (!res.ok) throw primaryErr;
+      for (const provider of providers) {
+        try {
+          const fallbackBody: Record<string, unknown> = {
+            model: provider.model,
+            messages: req.messages,
+            stream: false,
+          };
+          if (req.tools?.length) fallbackBody.tools = req.tools;
 
-      const json = await res.json();
-      const choice = json.choices?.[0];
-      if (!choice?.message) throw primaryErr;
-      return {
-        message: {
-          role: "assistant",
-          content: choice.message.content ?? null,
-          tool_calls: choice.message.tool_calls,
-        },
-        finishReason: choice.finish_reason ?? null,
-      };
+          const res = await fetch(provider.url, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${provider.key}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(fallbackBody),
+            signal: req.signal,
+          });
+          if (!res.ok) {
+            const errTxt = await res.text().catch(() => "");
+            console.warn(`[neuralake] fallback ${provider.name} failed (${res.status}):`, errTxt.slice(0, 200));
+            continue;
+          }
+
+          const json = await res.json();
+          const choice = json.choices?.[0];
+          if (!choice?.message) continue;
+          return {
+            message: {
+              role: "assistant",
+              content: choice.message.content ?? null,
+              ...(choice.message.tool_calls?.length ? { tool_calls: choice.message.tool_calls } : {}),
+            },
+            finishReason: choice.finish_reason ?? null,
+          };
+        } catch (fallbackErr) {
+          console.warn(`[neuralake] fallback ${provider.name} threw:`, fallbackErr);
+        }
+      }
+
+      throw primaryErr;
     }
   }
 }

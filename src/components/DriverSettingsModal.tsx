@@ -191,8 +191,6 @@ function DriverSettingsDialog({ onClose }: { onClose: () => void }) {
             <div className="flex flex-col gap-2">
               <a
                 href="/api/spotify/login"
-                target="_blank"
-                rel="noopener noreferrer"
                 className="flex min-h-12 items-center justify-center rounded-2xl border border-border bg-surface px-4 text-center text-sm font-semibold text-foreground hover:bg-background transition"
               >
                 Conectar meu Spotify via Web

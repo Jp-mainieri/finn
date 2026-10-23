@@ -392,14 +392,6 @@ export class SttTtsVoiceSession implements VoiceSession {
       this.speaking = true;
       this.playOpenAiTts(text).catch((err) => {
         console.warn("[voice-session] OpenAI TTS failed, falling back to native TTS", err);
-        const msg = err instanceof Error ? err.message : "erro";
-        if (!this.options.fetchImpl) {
-          this.options.handlers.onAssistantTranscript({
-            delta: ` (${msg})`,
-            startMs: this.sessionOffsetMs(),
-            endMs: this.sessionOffsetMs(),
-          });
-        }
         this.playNativeTts(text);
       });
     } else {

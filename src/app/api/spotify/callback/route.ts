@@ -77,36 +77,38 @@ export async function GET(request: NextRequest) {
   const token = escapeHtml(refreshToken);
   const response = clearStateCookie(
     htmlPage(
-      "Spotify conectado",
-      `<p>Guarde este refresh token como <code>SPOTIFY_REFRESH_TOKEN</code>. Ele dá acesso à sua conta: não compartilhe e feche esta página depois.</p>
-<pre>${token}</pre>
-<p><strong>Vercel</strong> (para cada ambiente que precisar):</p>
-<pre>vercel env add SPOTIFY_REFRESH_TOKEN production
-vercel env add SPOTIFY_REFRESH_TOKEN preview
-vercel env add SPOTIFY_REFRESH_TOKEN development</pre>
-<p>Depois faça um novo deploy para a variável valer.</p>
-<p><strong>Local</strong>: adicione em <code>.env.local</code> e reinicie o <code>npm run dev</code>:</p>
-<pre>SPOTIFY_REFRESH_TOKEN=${token}</pre>
-<p style="margin-top: 1.5rem;">
-  <button id="save-btn" data-token="${token}" style="background: #1db954; color: #fff; border: none; border-radius: 9999px; padding: 0.75rem 1.5rem; font-weight: bold; cursor: pointer; font-size: 1rem;">
-    Voltar para o Finn (Salvar neste aparelho)
+      "Spotify conectado com sucesso!",
+      `<p style="margin-bottom: 1.5rem;">
+  <button id="save-btn" data-token="${token}" style="background: #1db954; color: #000; border: none; border-radius: 9999px; padding: 1rem 1.75rem; font-weight: bold; cursor: pointer; font-size: 1.15rem; width: 100%;">
+    ✓ Voltar para o Finn (Spotify Conectado)
   </button>
 </p>
+<p>Sua conta do Spotify já foi salva automaticamente neste aparelho. Toque no botão acima para voltar ao Finn.</p>
+<details style="margin-top: 1.5rem;">
+  <summary style="cursor: pointer; color: #a1a1aa;">Opções avançadas (SPOTIFY_REFRESH_TOKEN para servidor)</summary>
+  <pre>${token}</pre>
+</details>
 <script>
-  document.getElementById('save-btn')?.addEventListener('click', function() {
-    try {
-      var btn = document.getElementById('save-btn');
-      var tokenVal = btn ? btn.getAttribute('data-token') : '';
-      if (tokenVal) {
-        var current = JSON.parse(localStorage.getItem('finn.driverSettings') || '{}');
-        current.spotifyRefreshToken = tokenVal;
-        localStorage.setItem('finn.driverSettings', JSON.stringify(current));
+  (function() {
+    var btn = document.getElementById('save-btn');
+    var tokenVal = btn ? btn.getAttribute('data-token') : '';
+    function saveToken() {
+      try {
+        if (tokenVal) {
+          var current = JSON.parse(localStorage.getItem('finn.driverSettings') || '{}');
+          current.spotifyRefreshToken = tokenVal;
+          localStorage.setItem('finn.driverSettings', JSON.stringify(current));
+        }
+      } catch (e) {
+        console.error(e);
       }
-    } catch (e) {
-      console.error(e);
     }
-    window.location.href = '/';
-  });
+    saveToken();
+    btn?.addEventListener('click', function() {
+      saveToken();
+      window.location.href = '/?spotify_refresh_token=' + encodeURIComponent(tokenVal);
+    });
+  })();
 </script>`,
     ),
     isSecure,

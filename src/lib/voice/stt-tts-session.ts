@@ -349,6 +349,8 @@ export class SttTtsVoiceSession implements VoiceSession {
     return eventId;
   }
 
+  private activeBufferSource: AudioBufferSourceNode | null = null;
+
   private async playOpenAiTts(text: string): Promise<void> {
     const token = this.options.getToken();
     const res = await this.fetchImpl(TTS_PATH, {
@@ -362,7 +364,34 @@ export class SttTtsVoiceSession implements VoiceSession {
 
     if (!res.ok) throw new Error("TTS upstream error");
 
-    const blob = await res.blob();
+    const ab = await res.arrayBuffer();
+    const ctx = this.options.audio.context;
+
+    // Prefer playing through the already-unlocked Web Audio AudioContext (same pipeline as earcon beep)
+    if (ctx && typeof ctx.decodeAudioData === "function") {
+      try {
+        await this.options.audio.resume?.();
+        const audioBuffer = await ctx.decodeAudioData(ab.slice(0));
+        this.speaking = true;
+        await new Promise<void>((resolve) => {
+          const source = ctx.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(ctx.destination);
+          this.activeBufferSource = source;
+          source.onended = () => {
+            if (this.activeBufferSource === source) this.activeBufferSource = null;
+            this.speaking = false;
+            resolve();
+          };
+          source.start(0);
+        });
+        return;
+      } catch (err) {
+        console.warn("[voice-session] WebAudio TTS decode failed, falling back to HTMLAudioElement", err);
+      }
+    }
+
+    const blob = new Blob([ab], { type: "audio/mpeg" });
     const url = URL.createObjectURL(blob);
     const audio = this.options.audio.output;
 
@@ -390,13 +419,20 @@ export class SttTtsVoiceSession implements VoiceSession {
 
   private playNativeTts(text: string): void {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      this.speaking = false;
+      if (!this.options.fetchImpl) {
+        void this.playOpenAiTts(text).catch(() => {
+          this.speaking = false;
+        });
+      } else {
+        this.speaking = false;
+      }
       return;
     }
 
     const synth = window.speechSynthesis;
     try {
-      synth.cancel();
+      if (synth.speaking) synth.cancel();
+      synth.resume?.();
     } catch {
       // ignore
     }
@@ -415,19 +451,51 @@ export class SttTtsVoiceSession implements VoiceSession {
     if (preferred) utter.voice = preferred;
     else if (ptVoices[0]) utter.voice = ptVoices[0];
 
+    let started = false;
     this.speaking = true;
+    utter.onstart = () => {
+      started = true;
+    };
     utter.onend = () => {
       this.speaking = false;
     };
     utter.onerror = () => {
       this.speaking = false;
+      if (!started && !this.options.fetchImpl) {
+        void this.playOpenAiTts(text).catch(() => undefined);
+      }
     };
 
     synth.speak(utter);
+
+    // iOS Safari fallback: if speechSynthesis silently drops an async utterance (didn't start within 450ms),
+    // automatically play via the unlocked Web Audio AudioContext using OpenAI TTS.
+    if (!this.options.fetchImpl) {
+      setTimeout(() => {
+        if (!started && !this.closed) {
+          try {
+            synth.cancel();
+          } catch {
+            // ignore
+          }
+          void this.playOpenAiTts(text).catch(() => {
+            this.speaking = false;
+          });
+        }
+      }, 450);
+    }
   }
 
   private stopSpeaking(): void {
     this.speaking = false;
+    if (this.activeBufferSource) {
+      try {
+        this.activeBufferSource.stop();
+      } catch {
+        // ignore
+      }
+      this.activeBufferSource = null;
+    }
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       try {
         window.speechSynthesis.cancel();

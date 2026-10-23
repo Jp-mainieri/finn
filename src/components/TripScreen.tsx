@@ -16,6 +16,8 @@ const TONE_CLASS: Record<StatusTone, string> = {
 
 const BIG_BUTTON = "min-h-24 w-full rounded-3xl px-6 text-2xl font-semibold transition-transform active:scale-[0.98]";
 
+export const FINN_UI_VERSION = "v0.5.0-neuralake-greeting";
+
 export function TripScreen({ view, controller }: { view: VoiceView; controller: VoiceController }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { voice } = view;
@@ -30,7 +32,15 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
   return (
     <div className="flex w-full flex-1 flex-col gap-5">
       <header className="flex items-center justify-between gap-3">
-        <span className="text-2xl font-bold">Finn</span>
+        <div className="flex items-center gap-2">
+          <span className="text-2xl font-bold">Finn</span>
+          <span
+            title="Versão atual carregada no aparelho"
+            className="rounded-full border border-border bg-surface px-2.5 py-0.5 font-mono text-xs text-accent"
+          >
+            {FINN_UI_VERSION}
+          </span>
+        </div>
         <div className="flex gap-2">
           {inTrip && (
             <button onClick={() => controller.endTrip()} className="min-h-12 rounded-full border border-border px-4 text-base text-muted">

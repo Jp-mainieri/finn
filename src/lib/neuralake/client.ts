@@ -69,9 +69,9 @@ export function getNeuralakeClient(): NeuralakeClient {
   cached = mocksEnabled()
     ? new MockNeuralakeClient()
     : new HttpNeuralakeClient(
-        requireEnv("NEURALAKE_API_KEY"),
-        optionalEnv("NEURALAKE_BASE_URL", "https://api.neuralake.cloud/v1"),
-        optionalEnv("NEURALAKE_MODEL", "auto"),
+        requireEnv("NEURALAKE_API_KEY").trim(),
+        optionalEnv("NEURALAKE_BASE_URL", "https://api.neuralake.cloud/v1").trim(),
+        optionalEnv("NEURALAKE_MODEL", "auto").trim(),
       );
   return cached;
 }

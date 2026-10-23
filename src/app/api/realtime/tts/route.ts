@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     return Response.json(
       { error: "TTS is not configured on the server (OPENAI_API_KEY required)" },
@@ -37,8 +37,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const model = optionalEnv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts");
-  const voice = typeof body?.voice === "string" && body.voice.trim() ? body.voice.trim() : optionalEnv("OPENAI_TTS_VOICE", "coral");
+  const model = optionalEnv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").trim();
+  const voice = typeof body?.voice === "string" && body.voice.trim() ? body.voice.trim() : optionalEnv("OPENAI_TTS_VOICE", "coral").trim();
 
   let upstream: Response;
   try {

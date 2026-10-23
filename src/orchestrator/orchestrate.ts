@@ -7,6 +7,7 @@ import {
   type DriverContext,
 } from "@/lib/contracts/a2a";
 import type { OrchestratorResponse } from "@/lib/contracts/client-events";
+import { getNeuralakeClient } from "@/lib/neuralake/client";
 import { classify } from "./classify";
 
 export const AGENT_TIMEOUT_MS = 8000;
@@ -94,6 +95,34 @@ export async function orchestrate(
   transcript: string,
   { agents, contextId, continuation, timeoutMs = AGENT_TIMEOUT_MS, driverContext }: OrchestrateOptions,
 ): Promise<OrchestratorResponse> {
+  if (transcript === "__GREETING__") {
+    try {
+      const client = getNeuralakeClient();
+      const { message } = await client.complete({
+        messages: [
+          {
+            role: "system",
+            content:
+              "Você é o Finn, copiloto de voz automotivo em português do Brasil. Cumprimente o motorista em uma frase curta e simpática (ex: 'Bom dia! Aqui é o Finn, conectado pela Neuralake. Para onde vamos ou o que quer ouvir hoje?').",
+          },
+          { role: "user", content: "Dê um bom dia curto ao motorista que acabou de ligar o carro." },
+        ],
+        memoryScope: "finn-greeting",
+      });
+      const speech =
+        message.content?.trim() ||
+        "Bom dia! Aqui é o Finn, conectado pela Neuralake. Para onde vamos hoje?";
+      return { speech, clientActions: [], results: [] };
+    } catch (err) {
+      console.error("[orchestrator] greeting Neuralake call failed", err);
+      return {
+        speech: "Bom dia! Aqui é o Finn. O áudio está funcionando, mas não consegui conectar na Neuralake agora.",
+        clientActions: [],
+        results: [],
+      };
+    }
+  }
+
   const matched = new Set(classify(transcript, agents));
   // A turn that clearly belongs only to other domains means the driver changed
   // topic ("toca rock" while waze waits for an address): drop the continuation.

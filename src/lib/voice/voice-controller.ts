@@ -139,6 +139,9 @@ export class VoiceController {
         this.machine.dispatch({ type: "TRIP_STARTED" });
         this.watchMic();
         if (!this.detector) void this.initWakeWord();
+        if (!this.view.needsToken) {
+          this.machine.dispatch({ type: "WAKE" });
+        }
       })
       .catch((err: unknown) => {
         const denied = err instanceof DOMException && (err.name === "NotAllowedError" || err.name === "SecurityError");
@@ -317,8 +320,12 @@ export class VoiceController {
 
     try {
       await session.connect();
-      if (this.session === session) this.machine.dispatch({ type: "CONNECTED" });
-      else await session.close();
+      if (this.session === session) {
+        this.machine.dispatch({ type: "CONNECTED" });
+        void this.greetDriver(session);
+      } else {
+        await session.close();
+      }
     } catch (err) {
       if (this.session !== session) return;
       this.session = null;
@@ -329,6 +336,24 @@ export class VoiceController {
         console.warn("[voice] could not start the Live session", err);
         this.fail({ kind: "connect-failed", message: "Não consegui conectar. Toque para tentar de novo." });
       }
+    }
+  }
+
+  private async greetDriver(session: VoiceSession): Promise<void> {
+    this.machine.dispatch({ type: "WORK_STARTED" });
+    try {
+      const result = await this.orchestrator.send("__GREETING__");
+      if (this.session !== session) return;
+      if (result.ok) {
+        session.speak(null, result.response.speech);
+      } else if (result.failure === "unauthorized") {
+        this.requireToken();
+        this.fail({ kind: "unauthorized", message: "Token inválido. Configure de novo." });
+      } else {
+        session.speak(null, "Bom dia! Não consegui falar com o servidor agora.");
+      }
+    } finally {
+      this.machine.dispatch({ type: "WORK_FINISHED" });
     }
   }
 

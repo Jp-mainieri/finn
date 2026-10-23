@@ -87,7 +87,9 @@ export class AudioIO {
     source.connect(this.micAnalyser);
 
     const mute = this.context.createGain();
-    mute.gain.value = 0;
+    // Use 1e-5 (-100 dB, completely inaudible) instead of 0 so iOS Safari WebKit
+    // never prunes the AudioWorklet / ScriptProcessor subgraph as a "dead node".
+    mute.gain.value = 0.00001;
 
     try {
       await this.context.audioWorklet.addModule(PCM_WORKLET_PATH);
@@ -97,7 +99,9 @@ export class AudioIO {
         processorOptions: { frameLength: 512 },
       });
       this.worklet.port.onmessage = (event: MessageEvent<Int16Array>) => {
-        this.receivedWorkletFrames = true;
+        const now = Date.now();
+        this.lastWorkletFrameMs = now;
+        this.lastPcmFrameMs = now;
         this.frameSink?.(event.data);
         this.sessionFrameSink?.(event.data);
       };
@@ -109,14 +113,17 @@ export class AudioIO {
       this.worklet = null;
     }
 
-    // Fallback: on iOS Safari if AudioWorklet fails or never emits frames,
-    // use a ScriptProcessorNode to downsample to 16 kHz Int16 frames.
+    // Fallback: on iOS Safari if AudioWorklet fails or stalls,
+    // use a ScriptProcessorNode + AnalyserNode time-domain sampler to deliver 16 kHz Int16 frames.
     this.attachScriptProcessorFallback(source, mute);
+    this.startAnalyserPcmFallback();
     return this.mic;
   }
 
   private scriptProcessor: ScriptProcessorNode | null = null;
-  private receivedWorkletFrames = false;
+  private analyserTimer: ReturnType<typeof setInterval> | undefined;
+  private lastWorkletFrameMs = 0;
+  private lastPcmFrameMs = 0;
 
   private attachScriptProcessorFallback(source: MediaStreamAudioSourceNode, mute: GainNode): void {
     if (typeof this.context.createScriptProcessor !== "function") return;
@@ -128,7 +135,8 @@ export class AudioIO {
       let filled = 0;
       let pos = 0;
       sp.onaudioprocess = (ev) => {
-        if (this.receivedWorkletFrames) return; // AudioWorklet is working fine
+        const now = Date.now();
+        if (now - this.lastWorkletFrameMs < 300) return; // AudioWorklet is actively delivering frames
         if (!this.frameSink && !this.sessionFrameSink) return;
         const input = ev.inputBuffer.getChannelData(0);
         while (pos < input.length) {
@@ -139,6 +147,7 @@ export class AudioIO {
             const out = acc;
             acc = new Int16Array(512);
             filled = 0;
+            this.lastPcmFrameMs = Date.now();
             this.frameSink?.(out);
             this.sessionFrameSink?.(out);
           }
@@ -153,6 +162,31 @@ export class AudioIO {
     } catch {
       // ignore
     }
+  }
+
+  private startAnalyserPcmFallback(): void {
+    clearInterval(this.analyserTimer);
+    const timeBuf = new Float32Array(2048);
+    this.analyserTimer = setInterval(() => {
+      if (!this.micAnalyser || (!this.frameSink && !this.sessionFrameSink)) return;
+      if (Date.now() - this.lastPcmFrameMs < 300) return;
+      try {
+        if (this.context.state !== "running") {
+          void this.context.resume().catch(() => undefined);
+        }
+        this.micAnalyser.getFloatTimeDomainData(timeBuf);
+        const frame = new Int16Array(512);
+        const ratio = timeBuf.length / 512;
+        for (let i = 0; i < 512; i++) {
+          const s = Math.max(-1, Math.min(1, timeBuf[Math.floor(i * ratio)] ?? 0));
+          frame[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        }
+        this.frameSink?.(frame);
+        this.sessionFrameSink?.(frame);
+      } catch {
+        // ignore
+      }
+    }, 32);
   }
 
   /** RMS (0..1) of the user's microphone right now; 0 when unknown. */
@@ -239,9 +273,12 @@ export class AudioIO {
   }
 
   release(): void {
+    clearInterval(this.analyserTimer);
+    this.analyserTimer = undefined;
     this.frameSink = null;
     this.sessionFrameSink = null;
-    this.receivedWorkletFrames = false;
+    this.lastWorkletFrameMs = 0;
+    this.lastPcmFrameMs = 0;
     this.worklet?.port.postMessage({ command: "disable" });
     this.worklet?.disconnect();
     this.worklet = null;

@@ -140,16 +140,17 @@ export class SttTtsVoiceSession implements VoiceSession {
 
     // Full-duplex barge-in (replicating GPT-Live-1 server_vad):
     // Mic stays open while Finn speaks. A single 32ms plosive spike (like the "B" in "Bom dia")
-    // is ignored, while sustained user speech (~320ms = 10 frames > 0.12 RMS) interrupts Finn
+    // is ignored, while sustained user speech (~190ms = 6 frames > 0.08 RMS) interrupts Finn
     // and immediately begins capturing the user's new utterance.
     if (this.speaking) {
       if (this.options.fetchImpl) {
         if (rms > 0.08) this.stopSpeaking();
         return;
       }
-      if (rms > 0.12) {
+      if (rms > 0.08) {
         this.bargeInFrames += 1;
-        if (this.bargeInFrames >= 10) {
+        this.turnPcmChunks.push(frame);
+        if (this.bargeInFrames >= 6) {
           this.bargeInFrames = 0;
           this.stopSpeaking();
           // Fall through so this frame immediately starts recording the user's interruption
@@ -217,6 +218,11 @@ export class SttTtsVoiceSession implements VoiceSession {
   /** Manually finishes and sends the current utterance (or any captured audio) right away. */
   commitSpeech(): void {
     if (!this.connected || this.closed) return;
+    // If Finn was still marked as speaking (e.g. iOS WebKit didn't fire onended yet),
+    // immediately unlock speaking state when the driver taps "Pronto".
+    if (this.speaking) {
+      this.stopSpeaking();
+    }
     // If VAD already triggered transcription moments before the user tapped "Pronto",
     // do not fire a second empty transcription request.
     if (this.transcribing) return;
@@ -236,15 +242,16 @@ export class SttTtsVoiceSession implements VoiceSession {
 
     if (chunks.length === 0) {
       this.options.handlers.onUserTranscript({
-        delta: "(Sem áudio capturado no microfone)",
+        delta: "(Sem áudio capturado no microfone — fale algo e toque em Pronto)",
         startMs: this.sessionOffsetMs(),
         endMs: this.sessionOffsetMs(),
       });
       return;
     }
 
+    const secs = ((chunks.length * 512) / 16000).toFixed(1);
     this.options.handlers.onUserTranscript({
-      delta: "Processando fala…",
+      delta: `(Enviando ${secs}s de áudio para o Whisper…)`,
       startMs: this.sessionOffsetMs(),
       endMs: this.sessionOffsetMs(),
     });
@@ -266,6 +273,14 @@ export class SttTtsVoiceSession implements VoiceSession {
     }
 
     this.turnPcmChunks = [];
+    if (!this.options.fetchImpl) {
+      const secs = ((chunks.length * 512) / 16000).toFixed(1);
+      this.options.handlers.onUserTranscript({
+        delta: `(Enviando ${secs}s de áudio para o Whisper…)`,
+        startMs: this.sessionOffsetMs(),
+        endMs: this.sessionOffsetMs(),
+      });
+    }
     void this.transcribeAndDelegate(chunks);
   }
 
@@ -380,8 +395,10 @@ export class SttTtsVoiceSession implements VoiceSession {
 
   private activeBufferSource: AudioBufferSourceNode | null = null;
   private activeUtterance: SpeechSynthesisUtterance | null = null;
+  private speakingSafetyTimer: ReturnType<typeof setTimeout> | undefined;
 
   private beginSpeakingState(): void {
+    clearTimeout(this.speakingSafetyTimer);
     this.speaking = true;
     this.bargeInFrames = 0;
     this.isRecording = false;
@@ -392,6 +409,8 @@ export class SttTtsVoiceSession implements VoiceSession {
   }
 
   private endSpeakingState(): void {
+    clearTimeout(this.speakingSafetyTimer);
+    this.speakingSafetyTimer = undefined;
     this.speaking = false;
     this.bargeInFrames = 0;
   }
@@ -428,18 +447,27 @@ export class SttTtsVoiceSession implements VoiceSession {
           return;
         }
         this.beginSpeakingState();
+        const durationMs = Math.ceil(audioBuffer.duration * 1000);
         await new Promise<void>((resolve) => {
+          let finished = false;
+          const finish = () => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(this.speakingSafetyTimer);
+            if (this.activeBufferSource === source) this.activeBufferSource = null;
+            this.endSpeakingState();
+            resolve();
+          };
           const source = ctx.createBufferSource();
           const gain = ctx.createGain();
           gain.gain.value = 1.5;
           source.buffer = audioBuffer;
           source.connect(gain).connect(ctx.destination);
           this.activeBufferSource = source;
-          source.onended = () => {
-            if (this.activeBufferSource === source) this.activeBufferSource = null;
-            this.endSpeakingState();
-            resolve();
-          };
+          // Mandatory safety timeout: iOS Safari WebKit frequently drops source.onended when
+          // getUserMedia is active, which previously left this.speaking = true forever!
+          this.speakingSafetyTimer = setTimeout(finish, durationMs + 250);
+          source.onended = finish;
           source.start(0);
         });
         return;
@@ -460,13 +488,25 @@ export class SttTtsVoiceSession implements VoiceSession {
       const finish = () => {
         if (settled) return;
         settled = true;
+        clearTimeout(this.speakingSafetyTimer);
         audio.removeEventListener("ended", finish);
         audio.removeEventListener("error", finish);
         URL.revokeObjectURL(url);
         this.endSpeakingState();
         resolve();
       };
+      this.speakingSafetyTimer = setTimeout(finish, 8000);
       audio.src = url;
+      audio.addEventListener(
+        "loadedmetadata",
+        () => {
+          if (Number.isFinite(audio.duration) && audio.duration > 0) {
+            clearTimeout(this.speakingSafetyTimer);
+            this.speakingSafetyTimer = setTimeout(finish, Math.ceil(audio.duration * 1000) + 350);
+          }
+        },
+        { once: true },
+      );
       audio.addEventListener("ended", finish, { once: true });
       audio.addEventListener("error", finish, { once: true });
       void audio.play().catch(finish);
@@ -503,6 +543,12 @@ export class SttTtsVoiceSession implements VoiceSession {
     else if (ptVoices[0]) utter.voice = ptVoices[0];
 
     this.beginSpeakingState();
+    const estimatedMs = Math.max(2500, Math.ceil((text.length / 14) * 1000) + 600);
+    this.speakingSafetyTimer = setTimeout(() => {
+      if (this.activeUtterance === utter) this.activeUtterance = null;
+      this.endSpeakingState();
+    }, estimatedMs);
+
     utter.onend = () => {
       if (this.activeUtterance === utter) this.activeUtterance = null;
       this.endSpeakingState();

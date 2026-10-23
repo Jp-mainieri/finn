@@ -367,12 +367,10 @@ export class VoiceController {
   private caption(speaker: "user" | "assistant", delta: string): void {
     const key = speaker === "user" ? "userText" : "assistantText";
     const current = this.view[key];
-    const isPlaceholder =
-      current === "…" ||
-      current === "Processando fala…" ||
-      current.startsWith("(");
+    const isPlaceholder = (s: string) =>
+      s === "…" || s === "Processando fala…" || s.startsWith("(");
     const text =
-      this.captionTurn === speaker && !isPlaceholder
+      this.captionTurn === speaker && !isPlaceholder(current) && !isPlaceholder(delta)
         ? current + delta
         : delta.trimStart();
     this.captionTurn = speaker;

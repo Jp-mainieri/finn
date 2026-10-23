@@ -160,14 +160,9 @@ export class VoiceController {
 
   /** Manually finishes and sends the user's current utterance right away. */
   commitSpeech(): void {
+    void this.audio?.resume();
     this.audio?.unlockSpeechSynthesis();
-    this.machine.dispatch({ type: "WORK_STARTED" });
-    try {
-      this.session?.commitSpeech?.();
-    } finally {
-      // Keep "Pensando…" while transcription is in flight (up to 1.5s if no delegation follows)
-      setTimeout(() => this.machine.dispatch({ type: "WORK_FINISHED" }), 1500);
-    }
+    this.session?.commitSpeech?.();
   }
 
   hangUp(): void {
@@ -314,6 +309,8 @@ export class VoiceController {
       audio,
       getToken: () => this.tokens.get(),
       getTtsMode: () => getDriverSettings().ttsMode,
+      onWorkStarted: () => this.machine.dispatch({ type: "WORK_STARTED" }),
+      onWorkFinished: () => this.machine.dispatch({ type: "WORK_FINISHED" }),
       handlers,
     });
     this.session = session;

@@ -13,6 +13,8 @@ export interface SttTtsVoiceSessionOptions {
   audio: AudioIO;
   getToken: () => string | null;
   getTtsMode?: () => "native" | "openai";
+  onWorkStarted?: () => void;
+  onWorkFinished?: () => void;
   handlers: VoiceSessionHandlers;
   fetchImpl?: typeof fetch;
 }
@@ -99,6 +101,7 @@ export class SttTtsVoiceSession implements VoiceSession {
   private connected = false;
   private closed = false;
   private speaking = false;
+  private transcribing = false;
   private isRecording = false;
   private speechFramesCount = 0;
   private startTime = 0;
@@ -108,11 +111,7 @@ export class SttTtsVoiceSession implements VoiceSession {
   private turnSeq = 0;
   private preroll: Int16Array[] = [];
   private recordedChunks: Int16Array[] = [];
-  private mediaRecorder: MediaRecorder | null = null;
-  private mediaChunks: Blob[] = [];
-  private mediaMimeType = "audio/mp4";
-  private vadTimer: ReturnType<typeof setInterval> | undefined;
-  private receivedPcmFrames = false;
+  private turnPcmChunks: Int16Array[] = [];
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: SttTtsVoiceSessionOptions) {
@@ -125,42 +124,8 @@ export class SttTtsVoiceSession implements VoiceSession {
     this.startTime = Date.now();
     await this.options.audio.resume?.();
     this.options.audio.setSessionFrameSink((frame) => {
-      this.receivedPcmFrames = true;
       this.processFrame(frame);
     });
-    this.startMediaRecorderBackup();
-  }
-
-  private startMediaRecorderBackup(): void {
-    const stream = this.options.audio.stream;
-    if (!stream || typeof MediaRecorder === "undefined") return;
-    try {
-      const mime =
-        MediaRecorder.isTypeSupported?.("audio/webm;codecs=opus")
-          ? "audio/webm;codecs=opus"
-          : MediaRecorder.isTypeSupported?.("audio/mp4")
-            ? "audio/mp4"
-            : "";
-      const mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-      this.mediaMimeType = mr.mimeType || mime || "audio/mp4";
-      this.mediaChunks = [];
-      mr.ondataavailable = (ev) => {
-        if (ev.data && ev.data.size > 0) this.mediaChunks.push(ev.data);
-      };
-      mr.start(250);
-      this.mediaRecorder = mr;
-
-      // Also poll AudioIO.micLevel() every 80ms in case AudioWorklet frames aren't firing on iOS
-      this.vadTimer = setInterval(() => {
-        if (this.closed || !this.connected || this.receivedPcmFrames) return;
-        const level = this.options.audio.micLevel?.() ?? 0;
-        const syntheticSample = Math.min(32767, Math.round(level * 32767));
-        const syntheticFrame = new Int16Array(512).fill(syntheticSample);
-        this.processFrame(syntheticFrame);
-      }, 80);
-    } catch (err) {
-      console.warn("[voice-session] MediaRecorder backup not available", err);
-    }
   }
 
   isSpeaking(): boolean {
@@ -183,11 +148,25 @@ export class SttTtsVoiceSession implements VoiceSession {
       }
     }
 
+    // Ignore mic frames while an utterance is currently being transcribed
+    // so ambient noise doesn't overwrite captions or start a phantom turn.
+    if (this.transcribing) {
+      return;
+    }
+
+    // Keep a rolling buffer of the current turn's 16 kHz PCM frames (up to ~15s = 470 frames)
+    // so clicking "Pronto, enviar fala" always has the complete spoken audio even if VAD
+    // didn't trigger or threshold wasn't crossed.
+    this.turnPcmChunks.push(frame);
+    if (this.turnPcmChunks.length > 470) {
+      this.turnPcmChunks.shift();
+    }
+
     const now = Date.now();
 
     if (!this.isRecording) {
       this.preroll.push(frame);
-      if (this.preroll.length > 10) {
+      if (this.preroll.length > 12) {
         this.preroll.shift();
       }
 
@@ -224,38 +203,38 @@ export class SttTtsVoiceSession implements VoiceSession {
   /** Manually finishes and sends the current utterance (or any captured audio) right away. */
   commitSpeech(): void {
     if (!this.connected || this.closed) return;
-    // Give instant visual feedback that the button tap was registered
+    // If VAD already triggered transcription moments before the user tapped "Pronto",
+    // do not fire a second empty transcription request.
+    if (this.transcribing) return;
+
+    const chunks =
+      this.isRecording && this.recordedChunks.length >= 10
+        ? [...this.recordedChunks]
+        : this.turnPcmChunks.length > 0
+          ? [...this.turnPcmChunks]
+          : [...this.preroll];
+
+    this.isRecording = false;
+    this.speechFramesCount = 0;
+    this.recordedChunks = [];
+    this.turnPcmChunks = [];
+    this.preroll = [];
+
+    if (chunks.length === 0) {
+      this.options.handlers.onUserTranscript({
+        delta: "(Sem áudio capturado no microfone)",
+        startMs: this.sessionOffsetMs(),
+        endMs: this.sessionOffsetMs(),
+      });
+      return;
+    }
+
     this.options.handlers.onUserTranscript({
       delta: "Processando fala…",
       startMs: this.sessionOffsetMs(),
       endMs: this.sessionOffsetMs(),
     });
-    // When the user manually taps "Pronto", ALWAYS prefer the complete MediaRecorder recording
-    // of the entire session so we never send just a 300ms pre-roll slice!
-    if (this.mediaRecorder) {
-      this.isRecording = false;
-      this.speechFramesCount = 0;
-      this.recordedChunks = [];
-      this.preroll = [];
-      this.flushMediaRecorderAndSend();
-      return;
-    }
-    if (this.isRecording && this.recordedChunks.length > 0 && this.receivedPcmFrames) {
-      this.speechFramesCount = Math.max(this.speechFramesCount, Math.ceil(MIN_SPEECH_MS / 32));
-      this.finalizeUtterance();
-      return;
-    }
-    if (this.preroll.length > 0 && this.receivedPcmFrames) {
-      const chunks = [...this.preroll];
-      this.preroll = [];
-      void this.transcribeAndDelegate(chunks);
-      return;
-    }
-    this.options.handlers.onUserTranscript({
-      delta: "(Sem áudio capturado no microfone)",
-      startMs: this.sessionOffsetMs(),
-      endMs: this.sessionOffsetMs(),
-    });
+    void this.transcribeAndDelegate(chunks);
   }
 
   private finalizeUtterance(): void {
@@ -269,62 +248,11 @@ export class SttTtsVoiceSession implements VoiceSession {
     // Each frame is 512 samples at 16kHz = 32ms
     const speechDurationMs = speechFrames * 32;
     if (speechDurationMs < MIN_SPEECH_MS) {
-      return; // Discard click / brief noise
+      return; // Discard click / brief noise (keep turnPcmChunks intact for manual "Pronto")
     }
 
-    if (!this.receivedPcmFrames && this.mediaRecorder) {
-      this.flushMediaRecorderAndSend();
-      return;
-    }
-
+    this.turnPcmChunks = [];
     void this.transcribeAndDelegate(chunks);
-  }
-
-  private flushMediaRecorderAndSend(): void {
-    const mr = this.mediaRecorder;
-    if (!mr) return;
-    let sent = false;
-    const sendBlob = () => {
-      if (sent || this.closed) return;
-      sent = true;
-      if (this.mediaChunks.length === 0) {
-        this.options.handlers.onUserTranscript({
-          delta: "(Áudio vazio no gravador)",
-          startMs: this.sessionOffsetMs(),
-          endMs: this.sessionOffsetMs(),
-        });
-        return;
-      }
-      const blob = new Blob(this.mediaChunks, { type: this.mediaMimeType });
-      this.mediaChunks = [];
-      void this.transcribeBlobAndDelegate(blob, this.mediaMimeType);
-      // Restart MediaRecorder for next turn in the same window
-      if (!this.closed && this.connected) {
-        this.startMediaRecorderBackup();
-      }
-    };
-    if (mr.state === "recording") {
-      mr.addEventListener("stop", sendBlob, { once: true });
-      try {
-        mr.requestData?.();
-        mr.stop();
-      } catch {
-        sendBlob();
-      }
-      setTimeout(sendBlob, 300);
-    } else {
-      sendBlob();
-    }
-  }
-
-  private async transcribeBlobAndDelegate(blob: Blob, mimeType: string): Promise<void> {
-    try {
-      const ab = await blob.arrayBuffer();
-      const base64Audio = toBase64(new Uint8Array(ab));
-      await this.sendBase64ToTranscribe(base64Audio, mimeType);
-    } catch (err) {
-      console.warn("[voice-session] MediaRecorder blob transcribe failed", err);
-    }
   }
 
   private async transcribeAndDelegate(chunks: Int16Array[]): Promise<void> {
@@ -335,6 +263,8 @@ export class SttTtsVoiceSession implements VoiceSession {
 
   private async sendBase64ToTranscribe(base64Audio: string, mimeType: string): Promise<void> {
     const token = this.options.getToken();
+    this.transcribing = true;
+    this.options.onWorkStarted?.();
 
     try {
       const res = await this.fetchImpl(TRANSCRIBE_PATH, {
@@ -392,6 +322,9 @@ export class SttTtsVoiceSession implements VoiceSession {
     } catch (err) {
       console.warn("[voice-session] STT transcribe request failed", err);
       this.options.handlers.onError("STT failed");
+    } finally {
+      this.transcribing = false;
+      this.options.onWorkFinished?.();
     }
   }
 
@@ -512,18 +445,9 @@ export class SttTtsVoiceSession implements VoiceSession {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    clearInterval(this.vadTimer);
-    this.vadTimer = undefined;
-    try {
-      if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
-        this.mediaRecorder.onstop = null;
-        this.mediaRecorder.stop();
-      }
-    } catch {
-      // ignore
-    }
-    this.mediaRecorder = null;
-    this.mediaChunks = [];
+    this.turnPcmChunks = [];
+    this.recordedChunks = [];
+    this.preroll = [];
     this.stopSpeaking();
     this.options.audio.setSessionFrameSink(null);
     this.options.handlers.onClosed("close_requested");

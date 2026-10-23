@@ -18,9 +18,9 @@ export async function POST(request: Request) {
     );
   }
 
-  const sttProviderEnv = optionalEnv("STT_PROVIDER", "").toLowerCase();
-  const groqKey = process.env.GROQ_API_KEY;
-  const openaiKey = process.env.OPENAI_API_KEY;
+  const sttProviderEnv = optionalEnv("STT_PROVIDER", "").trim().toLowerCase();
+  const groqKey = process.env.GROQ_API_KEY?.trim();
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
 
   let provider: "groq" | "openai";
   let url: string;
@@ -30,12 +30,12 @@ export async function POST(request: Request) {
   if (groqKey && sttProviderEnv !== "openai") {
     provider = "groq";
     url = GROQ_TRANSCRIBE_URL;
-    model = optionalEnv("GROQ_STT_MODEL", "whisper-large-v3-turbo");
+    model = optionalEnv("GROQ_STT_MODEL", "whisper-large-v3-turbo").trim();
     apiKey = groqKey;
   } else if (openaiKey) {
     provider = "openai";
     url = OPENAI_TRANSCRIBE_URL;
-    model = optionalEnv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe");
+    model = optionalEnv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe").trim();
     apiKey = openaiKey;
   } else {
     return Response.json(
@@ -61,7 +61,7 @@ export async function POST(request: Request) {
       return Response.json({ error: "Audio data is required" }, { status: 400 });
     }
 
-    const mimeType = typeof body?.mimeType === "string" ? body.mimeType : "audio/wav";
+    const cleanMime = (typeof body?.mimeType === "string" ? body.mimeType : "audio/wav").split(";")[0]?.trim() || "audio/wav";
     const base64Clean = raw.replace(/^data:[^;]+;base64,/, "");
     const buffer = Buffer.from(base64Clean, "base64");
     if (buffer.length === 0) {
@@ -74,9 +74,9 @@ export async function POST(request: Request) {
       );
     }
 
-    audioBlob = new Blob([buffer], { type: mimeType });
-    if (mimeType.includes("webm")) filename = "audio.webm";
-    else if (mimeType.includes("mp4") || mimeType.includes("m4a")) filename = "audio.m4a";
+    audioBlob = new Blob([buffer], { type: cleanMime });
+    if (cleanMime.includes("webm")) filename = "audio.webm";
+    else if (cleanMime.includes("mp4") || cleanMime.includes("m4a")) filename = "audio.m4a";
   } else if (contentType.includes("multipart/form-data") || contentType.includes("application/x-www-form-urlencoded")) {
     let formData: FormData | null = null;
     try {

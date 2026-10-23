@@ -110,13 +110,18 @@ export class SttTtsVoiceSession implements VoiceSession {
   private lastSpeechMs = 0;
   private seq = 0;
   private turnSeq = 0;
+  private transcribeReqSeq = 0;
   private preroll: Int16Array[] = [];
   private recordedChunks: Int16Array[] = [];
   private turnPcmChunks: Int16Array[] = [];
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: SttTtsVoiceSessionOptions) {
-    this.fetchImpl = options.fetchImpl ?? (typeof fetch !== "undefined" ? fetch : (() => Promise.reject()) as unknown as typeof fetch);
+    this.fetchImpl =
+      options.fetchImpl ??
+      (typeof fetch !== "undefined"
+        ? (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init)
+        : ((() => Promise.reject(new Error("fetch unavailable"))) as unknown as typeof fetch));
   }
 
   async connect(): Promise<void> {
@@ -163,18 +168,18 @@ export class SttTtsVoiceSession implements VoiceSession {
       }
     }
 
-    // Ignore mic frames while an utterance is currently being transcribed
-    // so ambient noise doesn't overwrite captions or start a phantom turn.
-    if (this.transcribing) {
-      return;
-    }
-
-    // Keep a rolling buffer of the current turn's 16 kHz PCM frames (up to ~15s = 470 frames)
-    // so clicking "Pronto, enviar fala" always has the complete spoken audio even if VAD
-    // didn't trigger or threshold wasn't crossed.
+    // Always keep a rolling buffer of the current turn's 16 kHz PCM frames (up to ~15s = 470 frames)
+    // BEFORE checking this.transcribing, so clicking "Pronto, enviar fala" ALWAYS has the user's
+    // complete audio even if a background auto-VAD request was in flight!
     this.turnPcmChunks.push(frame);
     if (this.turnPcmChunks.length > 470) {
       this.turnPcmChunks.shift();
+    }
+
+    // Ignore auto-VAD triggers while an utterance is currently being transcribed
+    // so ambient noise doesn't overwrite captions or start a phantom turn.
+    if (this.transcribing) {
+      return;
     }
 
     const now = Date.now();
@@ -223,9 +228,6 @@ export class SttTtsVoiceSession implements VoiceSession {
     if (this.speaking) {
       this.stopSpeaking();
     }
-    // If VAD already triggered transcription moments before the user tapped "Pronto",
-    // do not fire a second empty transcription request.
-    if (this.transcribing) return;
 
     const chunks =
       this.isRecording && this.recordedChunks.length >= 10
@@ -272,7 +274,6 @@ export class SttTtsVoiceSession implements VoiceSession {
       return; // Discard click / brief noise (keep turnPcmChunks intact for manual "Pronto")
     }
 
-    this.turnPcmChunks = [];
     if (!this.options.fetchImpl) {
       const secs = ((chunks.length * 512) / 16000).toFixed(1);
       this.options.handlers.onUserTranscript({
@@ -292,11 +293,14 @@ export class SttTtsVoiceSession implements VoiceSession {
 
   private async sendBase64ToTranscribe(base64Audio: string, mimeType: string): Promise<void> {
     const token = this.options.getToken();
+    this.transcribeReqSeq += 1;
+    const reqId = this.transcribeReqSeq;
     this.transcribing = true;
     this.options.onWorkStarted?.();
 
     try {
-      const res = await this.fetchImpl(TRANSCRIBE_PATH, {
+      const fetchFn = this.fetchImpl;
+      const res = await fetchFn(TRANSCRIBE_PATH, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -305,7 +309,7 @@ export class SttTtsVoiceSession implements VoiceSession {
         body: JSON.stringify({ audio: base64Audio, mimeType }),
       });
 
-      if (this.closed) return;
+      if (this.closed || reqId !== this.transcribeReqSeq) return;
 
       if (res.status === 401) {
         this.options.handlers.onError("Unauthorized");
@@ -323,7 +327,7 @@ export class SttTtsVoiceSession implements VoiceSession {
       }
 
       const data = (await res.json().catch(() => null)) as { text?: unknown } | null;
-      if (this.closed) return;
+      if (this.closed || reqId !== this.transcribeReqSeq) return;
 
       const text = typeof data?.text === "string" ? data.text.trim() : "";
 
@@ -336,6 +340,8 @@ export class SttTtsVoiceSession implements VoiceSession {
         return;
       }
 
+      // Valid speech recognized: clear the turn rolling buffer and delegate
+      this.turnPcmChunks = [];
       const offset = this.sessionOffsetMs();
       this.options.handlers.onUserTranscript({
         delta: text,
@@ -350,9 +356,19 @@ export class SttTtsVoiceSession implements VoiceSession {
       });
     } catch (err) {
       console.warn("[voice-session] STT transcribe request failed", err);
+      if (!this.options.fetchImpl) {
+        const msg = err instanceof Error ? err.message : "erro de rede";
+        this.options.handlers.onUserTranscript({
+          delta: `(Falha ao enviar áudio: ${msg})`,
+          startMs: this.sessionOffsetMs(),
+          endMs: this.sessionOffsetMs(),
+        });
+      }
       this.options.handlers.onError("STT failed");
     } finally {
-      this.transcribing = false;
+      if (reqId === this.transcribeReqSeq) {
+        this.transcribing = false;
+      }
       this.options.onWorkFinished?.();
     }
   }
@@ -418,7 +434,8 @@ export class SttTtsVoiceSession implements VoiceSession {
   private async playOpenAiTts(text: string): Promise<void> {
     this.beginSpeakingState();
     const token = this.options.getToken();
-    const res = await this.fetchImpl(TTS_PATH, {
+    const fetchFn = this.fetchImpl;
+    const res = await fetchFn(TTS_PATH, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

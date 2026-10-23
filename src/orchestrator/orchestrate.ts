@@ -111,12 +111,12 @@ export async function orchestrate(
       });
       const speech =
         message.content?.trim() ||
-        "Bom dia! Aqui é o Finn, conectado pela Neuralake. Para onde vamos hoje?";
+        "Bom dia! Aqui é o Finn, pronto para a viagem. Para onde vamos ou o que quer ouvir hoje?";
       return { speech, clientActions: [], results: [] };
     } catch (err) {
-      console.error("[orchestrator] greeting Neuralake call failed", err);
+      console.warn("[orchestrator] greeting Neuralake call failed, using automotive greeting fallback", err);
       return {
-        speech: "Bom dia! Aqui é o Finn. O áudio está funcionando, mas não consegui conectar na Neuralake agora.",
+        speech: "Bom dia! Aqui é o Finn, pronto para a viagem. Para onde vamos ou o que você quer ouvir hoje?",
         clientActions: [],
         results: [],
       };

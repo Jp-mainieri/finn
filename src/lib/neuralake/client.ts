@@ -16,9 +16,40 @@ export class NeuralakeHttpError extends Error {
   }
 }
 
+let cachedGroqModels: string[] | null = null;
+let groqModelsFetchedAt = 0;
+
+async function getAvailableGroqChatModels(apiKey: string): Promise<string[]> {
+  if (cachedGroqModels && Date.now() - groqModelsFetchedAt < 10 * 60 * 1000) {
+    return cachedGroqModels;
+  }
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/models", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(2500),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as { data?: Array<{ id: string }> };
+    const models = (json.data ?? [])
+      .map((m) => m.id)
+      .filter(
+        (id) =>
+          !id.includes("whisper") &&
+          !id.includes("embed") &&
+          !id.includes("guard") &&
+          !id.includes("tts") &&
+          !id.includes("orpheus"),
+      );
+    cachedGroqModels = models;
+    groqModelsFetchedAt = Date.now();
+    return models;
+  } catch {
+    return [];
+  }
+}
+
 export class HttpNeuralakeClient implements NeuralakeClient {
   private readonly cleanBaseUrl: string;
-  private primaryCooldownUntil = 0;
 
   constructor(
     private readonly apiKey: string,
@@ -42,18 +73,14 @@ export class HttpNeuralakeClient implements NeuralakeClient {
     const isTest = Boolean(process.env.VITEST);
 
     try {
-      if (!isTest && Date.now() < this.primaryCooldownUntil) {
-        throw new NeuralakeHttpError(429, "Primary Neuralake in cooldown");
-      }
-
       const primarySignal =
         !isTest && typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
           ? req.signal
-            ? AbortSignal.any([req.signal, AbortSignal.timeout(2500)])
-            : AbortSignal.timeout(2500)
+            ? AbortSignal.any([req.signal, AbortSignal.timeout(5500)])
+            : AbortSignal.timeout(5500)
           : req.signal;
 
-      const res = await fetch(`${this.cleanBaseUrl}/chat/completions`, {
+      let res = await fetch(`${this.cleanBaseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
@@ -62,6 +89,22 @@ export class HttpNeuralakeClient implements NeuralakeClient {
         body: JSON.stringify(body),
         signal: primarySignal,
       });
+
+      // Retry once after 500ms if Neuralake returns 429 (Model busy / engine_overloaded)
+      if (res.status === 429 && !isTest && !req.signal?.aborted) {
+        await res.body?.cancel().catch(() => {});
+        await new Promise((r) => setTimeout(r, 500));
+        res = await fetch(`${this.cleanBaseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: primarySignal,
+        });
+      }
+
       if (!res.ok) throw new NeuralakeHttpError(res.status, await res.text());
 
       const json = await res.json();
@@ -81,7 +124,6 @@ export class HttpNeuralakeClient implements NeuralakeClient {
       // In unit/acceptance tests, never fall back so tests can assert NeuralakeHttpError behavior.
       if (isTest) throw primaryErr;
 
-      this.primaryCooldownUntil = Date.now() + 120_000;
       console.warn("[neuralake] primary endpoint failed, attempting LLM fallback:", primaryErr);
 
       const groqKey = process.env.GROQ_API_KEY?.trim();
@@ -89,18 +131,16 @@ export class HttpNeuralakeClient implements NeuralakeClient {
 
       const providers: Array<{ name: string; url: string; key: string; model: string }> = [];
       if (groqKey) {
-        providers.push({
-          name: "groq-llama-3.3-70b",
-          url: "https://api.groq.com/openai/v1/chat/completions",
-          key: groqKey,
-          model: "llama-3.3-70b-versatile",
-        });
-        providers.push({
-          name: "groq-llama-3.1-8b",
-          url: "https://api.groq.com/openai/v1/chat/completions",
-          key: groqKey,
-          model: "llama-3.1-8b-instant",
-        });
+        const discovered = await getAvailableGroqChatModels(groqKey);
+        const candidates = discovered.length > 0 ? discovered.slice(0, 3) : ["llama-3.3-70b-versatile"];
+        for (const model of candidates) {
+          providers.push({
+            name: `groq-${model}`,
+            url: "https://api.groq.com/openai/v1/chat/completions",
+            key: groqKey,
+            model,
+          });
+        }
       }
       if (openaiKey) {
         providers.push({

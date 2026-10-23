@@ -53,6 +53,8 @@ export interface ToolLoopOptions {
   fallbackErrorSpeech?: string;
   /** Synthesizes confirmation speech directly to skip the 2nd LLM round-trip when FINN_FAST_SPEECH=1. */
   fastSpeech?: (toolName: string, result: unknown) => string | null;
+  /** Deterministic tool execution fallback in production when all LLM providers are unavailable/busy. */
+  deterministicFallback?: (input: AgentTaskInput) => Promise<AgentResult | null>;
 }
 
 /**
@@ -161,6 +163,27 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<AgentResult> {
     return result("failed", fallbackErrorSpeech);
   } catch (err) {
     console.error(`[agent:${agent}] tool loop failed`, err);
+    if (!process.env.VITEST) {
+      const lastOk = [...toolCalls].reverse().find((t) => t.ok);
+      if (lastOk && lastOk.name !== "list_playlists") {
+        if (inputRequired) {
+          return result("input-required", "");
+        }
+        const fast = opts.fastSpeech?.(lastOk.name, lastOk.result);
+        if (fast) {
+          return result("completed", fast);
+        }
+      }
+      if (opts.deterministicFallback) {
+        try {
+          const fallback = await opts.deterministicFallback(input);
+          if (fallback) return fallback;
+        } catch (fErr) {
+          if (fErr instanceof UserFacingError) return result("failed", fErr.speech);
+          console.error(`[agent:${agent}] deterministic fallback threw`, fErr);
+        }
+      }
+    }
     return result("failed", fallbackErrorSpeech);
   }
 }

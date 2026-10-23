@@ -55,6 +55,23 @@ export async function POST(request: Request) {
         response_format: "mp3",
       }),
     });
+
+    // Fallback to standard tts-1 / nova if gpt-4o-mini-tts is not enabled on the OpenAI project
+    if (!upstream.ok && model !== "tts-1" && !process.env.VITEST) {
+      upstream = await fetch(OPENAI_SPEECH_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "tts-1",
+          voice: "nova",
+          input: text,
+          response_format: "mp3",
+        }),
+      });
+    }
   } catch (err) {
     console.error("[tts] upstream fetch failed", err);
     return Response.json({ error: "TTS upstream request failed" }, { status: 502 });

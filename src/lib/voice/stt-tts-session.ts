@@ -363,9 +363,42 @@ export class SttTtsVoiceSession implements VoiceSession {
   }
 
   private activeBufferSource: AudioBufferSourceNode | null = null;
+  private activeUtterance: SpeechSynthesisUtterance | null = null;
+
+  private setMicEnabled(enabled: boolean): void {
+    try {
+      const track = this.options.audio.micTrack;
+      if (track) track.enabled = enabled;
+    } catch {
+      // ignore
+    }
+  }
+
+  private beginSpeakingState(): void {
+    this.speaking = true;
+    this.isRecording = false;
+    this.speechFramesCount = 0;
+    this.recordedChunks = [];
+    this.turnPcmChunks = [];
+    this.preroll = [];
+    if (!this.options.fetchImpl) {
+      this.setMicEnabled(false);
+    }
+  }
+
+  private endSpeakingState(): void {
+    this.speaking = false;
+    if (!this.options.fetchImpl) {
+      setTimeout(() => {
+        if (!this.speaking && !this.closed) {
+          this.setMicEnabled(true);
+        }
+      }, 150);
+    }
+  }
 
   private async playOpenAiTts(text: string): Promise<void> {
-    this.speaking = true;
+    this.beginSpeakingState();
     const token = this.options.getToken();
     const res = await this.fetchImpl(TTS_PATH, {
       method: "POST",
@@ -380,7 +413,7 @@ export class SttTtsVoiceSession implements VoiceSession {
 
     const ab = await res.arrayBuffer();
     if (this.closed) {
-      this.speaking = false;
+      this.endSpeakingState();
       return;
     }
 
@@ -392,20 +425,20 @@ export class SttTtsVoiceSession implements VoiceSession {
         await this.options.audio.resume?.();
         const audioBuffer = await ctx.decodeAudioData(ab.slice(0));
         if (this.closed) {
-          this.speaking = false;
+          this.endSpeakingState();
           return;
         }
-        this.speaking = true;
+        this.beginSpeakingState();
         await new Promise<void>((resolve) => {
           const source = ctx.createBufferSource();
           const gain = ctx.createGain();
-          gain.gain.value = 1.4;
+          gain.gain.value = 1.5;
           source.buffer = audioBuffer;
           source.connect(gain).connect(ctx.destination);
           this.activeBufferSource = source;
           source.onended = () => {
             if (this.activeBufferSource === source) this.activeBufferSource = null;
-            this.speaking = false;
+            this.endSpeakingState();
             resolve();
           };
           source.start(0);
@@ -421,7 +454,7 @@ export class SttTtsVoiceSession implements VoiceSession {
     const url = URL.createObjectURL(blob);
     const audio = this.options.audio.output;
 
-    this.speaking = true;
+    this.beginSpeakingState();
 
     await new Promise<void>((resolve) => {
       let settled = false;
@@ -431,7 +464,7 @@ export class SttTtsVoiceSession implements VoiceSession {
         audio.removeEventListener("ended", finish);
         audio.removeEventListener("error", finish);
         URL.revokeObjectURL(url);
-        this.speaking = false;
+        this.endSpeakingState();
         resolve();
       };
       audio.src = url;
@@ -443,13 +476,7 @@ export class SttTtsVoiceSession implements VoiceSession {
 
   private playNativeTts(text: string): void {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      if (!this.options.fetchImpl) {
-        void this.playOpenAiTts(text).catch(() => {
-          this.speaking = false;
-        });
-      } else {
-        this.speaking = false;
-      }
+      this.endSpeakingState();
       return;
     }
 
@@ -462,8 +489,9 @@ export class SttTtsVoiceSession implements VoiceSession {
     }
 
     const utter = new SpeechSynthesisUtterance(text);
+    this.activeUtterance = utter;
     utter.lang = "pt-BR";
-    utter.rate = 1.05;
+    utter.rate = 1.02;
 
     const voices = synth.getVoices?.() ?? [];
     const ptVoices = voices.filter(
@@ -475,43 +503,22 @@ export class SttTtsVoiceSession implements VoiceSession {
     if (preferred) utter.voice = preferred;
     else if (ptVoices[0]) utter.voice = ptVoices[0];
 
-    let started = false;
-    this.speaking = true;
-    utter.onstart = () => {
-      started = true;
-    };
+    this.beginSpeakingState();
     utter.onend = () => {
-      this.speaking = false;
+      if (this.activeUtterance === utter) this.activeUtterance = null;
+      this.endSpeakingState();
     };
     utter.onerror = () => {
-      this.speaking = false;
-      if (!started && !this.options.fetchImpl) {
-        void this.playOpenAiTts(text).catch(() => undefined);
-      }
+      if (this.activeUtterance === utter) this.activeUtterance = null;
+      this.endSpeakingState();
     };
 
     synth.speak(utter);
-
-    // iOS Safari fallback: if speechSynthesis silently drops an async utterance (didn't start within 450ms),
-    // automatically play via the unlocked Web Audio AudioContext using OpenAI TTS.
-    if (!this.options.fetchImpl) {
-      setTimeout(() => {
-        if (!started && !this.closed) {
-          try {
-            synth.cancel();
-          } catch {
-            // ignore
-          }
-          void this.playOpenAiTts(text).catch(() => {
-            this.speaking = false;
-          });
-        }
-      }, 450);
-    }
   }
 
   private stopSpeaking(): void {
-    this.speaking = false;
+    this.activeUtterance = null;
+    this.endSpeakingState();
     if (this.activeBufferSource) {
       try {
         this.activeBufferSource.stop();

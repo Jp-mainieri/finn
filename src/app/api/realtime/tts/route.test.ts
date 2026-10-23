@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { POST } from "./route";
+import { POST, splitIntoTtsChunks } from "./route";
 
 const req = (body: unknown, token = "s3cret") =>
   new Request("http://x/api/realtime/tts", {
@@ -80,5 +80,35 @@ describe("POST /api/realtime/tts", () => {
 
     const res = await POST(req({ text: "Olá" }));
     expect(res.status).toBe(502);
+  });
+
+  describe("splitIntoTtsChunks", () => {
+    it("keeps short text as a single chunk", () => {
+      expect(splitIntoTtsChunks("Olá, tudo bem?")).toEqual(["Olá, tudo bem?"]);
+    });
+
+    it("splits text longer than maxChunkLen along sentence boundaries", () => {
+      const text =
+        "Iniciando trajeto para a Avenida Paulista. O tempo estimado de viagem é de 35 minutos com trânsito moderado na Marginal Pinheiros. Boa viagem e dirija com cuidado!";
+      const chunks = splitIntoTtsChunks(text, 80);
+      expect(chunks.length).toBeGreaterThan(1);
+      for (const chunk of chunks) {
+        expect(chunk.length).toBeLessThanOrEqual(80);
+      }
+      expect(chunks.join(" ")).toBe(text);
+    });
+
+    it("splits long single sentences along clause or word boundaries", () => {
+      const longSentence = "A".repeat(50) + ", " + "B".repeat(50) + ", " + "C".repeat(50);
+      const chunks = splitIntoTtsChunks(longSentence, 80);
+      expect(chunks.length).toBeGreaterThan(1);
+      for (const chunk of chunks) {
+        expect(chunk.length).toBeLessThanOrEqual(80);
+      }
+    });
+
+    it("returns empty array for empty or whitespace text", () => {
+      expect(splitIntoTtsChunks("   ")).toEqual([]);
+    });
   });
 });

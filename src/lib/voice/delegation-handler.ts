@@ -43,6 +43,7 @@ export class DelegationHandler {
   private async process({ id, offsetMs }: Delegation): Promise<void> {
     const transcript = await this.collectTranscript(offsetMs);
     if (!transcript) {
+      this.deps.transcripts.clear();
       this.deps.speak(id, SPEECH.notUnderstood);
       return;
     }
@@ -68,7 +69,16 @@ export class DelegationHandler {
       await sleep(100);
       waited += 100;
     }
-    return transcripts.takeUntil(offsetMs);
+    const transcript = transcripts.takeUntil(offsetMs);
+    if (!transcript && transcripts.peek()) {
+      // If takeUntil(offsetMs) missed because fragments started at or after offsetMs
+      // (due to timestamp jitter or STT completion after delegation cutoff),
+      // consume all pending fragments so the utterance is not lost or left to corrupt the next turn.
+      const fallback = transcripts.peek();
+      transcripts.clear();
+      return fallback;
+    }
+    return transcript;
   }
 }
 

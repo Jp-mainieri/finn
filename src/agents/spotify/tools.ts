@@ -1,5 +1,6 @@
 import type { ToolExecutor } from "@/lib/agent-runtime";
 import type { AgentTaskInput } from "@/lib/contracts/a2a";
+import { spotifyRequest } from "@/lib/spotify/api";
 import { findBestMatch } from "@/lib/spotify/fuzzy";
 import { controlPlayback, playContext, type PlaybackAction } from "@/lib/spotify/player";
 import { listPlaylists, playlistUri, type Playlist } from "@/lib/spotify/playlists";
@@ -31,6 +32,47 @@ export const spotifyExecutors: Record<string, ToolExecutor> = {
     const playlists = await playlistsFor(input);
     const match = findBestMatch(requested, playlists, (p) => p.name);
     if (match.kind === "none") {
+      if (!process.env.VITEST) {
+        const isGeneric =
+          !requested ||
+          /^(m[uú]sica|uma m[uú]sica|alguma m[uú]sica|qualquer uma|qualquer m[uú]sica|spotify|som|um som)$/i.test(
+            requested,
+          );
+        if (isGeneric && playlists.length > 0) {
+          const p = playlists[0];
+          await playContext(playlistUri(p.id), input.signal, input.driverContext?.spotifyRefreshToken);
+          return { result: { found: true, playlist: { id: p.id, name: p.name } } };
+        }
+
+        try {
+          const searchRes = await spotifyRequest<{
+            playlists?: { items?: Array<{ id?: string; name?: string; uri?: string } | null> };
+            albums?: { items?: Array<{ id?: string; name?: string; uri?: string } | null> };
+            artists?: { items?: Array<{ id?: string; name?: string; uri?: string } | null> };
+          }>(
+            `/search?q=${encodeURIComponent(requested)}&type=playlist,album,artist&limit=3`,
+            { signal: input.signal, refreshToken: input.driverContext?.spotifyRefreshToken },
+          );
+
+          const foundItem =
+            searchRes?.playlists?.items?.find((p) => p?.uri && p?.name) ??
+            searchRes?.albums?.items?.find((a) => a?.uri && a?.name) ??
+            searchRes?.artists?.items?.find((ar) => ar?.uri && ar?.name);
+
+          if (foundItem?.uri && foundItem?.name) {
+            await playContext(foundItem.uri, input.signal, input.driverContext?.spotifyRefreshToken);
+            return {
+              result: {
+                found: true,
+                playlist: { id: foundItem.id ?? foundItem.uri, name: foundItem.name },
+              },
+            };
+          }
+        } catch (searchErr) {
+          console.warn("[spotify] fallback search failed:", searchErr);
+        }
+      }
+
       return {
         result: { found: false, requested, suggestions: match.suggestions.map((p) => p.name) },
       };

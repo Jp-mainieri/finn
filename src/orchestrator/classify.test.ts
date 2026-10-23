@@ -15,6 +15,16 @@ describe("classify", () => {
     ["vamos para o trabalho", ["waze"]],
     ["toca minha playlist e me leva pra casa", ["spotify", "waze"]], // UC7
     ["Coloca a música do dia e traça a rota pro trabalho", ["spotify", "waze"]],
+    ["abre o waze", ["waze"]],
+    ["coloca no waze", ["waze"]],
+    ["quero ouvir rock", ["spotify"]],
+    ["coloca uma música", ["spotify"]],
+    ["toca alguma coisa", ["spotify"]],
+    ["bota um sertanejo", ["spotify"]],
+    ["vai para avenida paulista", ["waze"]],
+    ["endereço rua X", ["waze"]],
+    ["vai no shopping", ["waze"]],
+    ["escutar rock", ["spotify"]],
     ["que horas são?", []],
   ])("%s → %j", (transcript, expected) => {
     expect(classify(transcript)).toEqual(expected);

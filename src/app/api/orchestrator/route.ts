@@ -27,12 +27,15 @@ export async function POST(request: Request) {
   }
 
   let driverContext = body.driverContext;
-  if (!driverContext?.spotifyRefreshToken) {
-    const cookieToken =
-      getCookie(request, "finn_spotify_token") ?? getCookie(request, "finn_spotify_rt");
-    if (cookieToken) {
-      driverContext = { ...driverContext, spotifyRefreshToken: cookieToken };
-    }
+  const cookieToken =
+    getCookie(request, "finn_spotify_token") ?? getCookie(request, "finn_spotify_rt");
+  const bodyRt = driverContext?.spotifyRefreshToken?.trim();
+  const validBodyRt = bodyRt && bodyRt !== "undefined" && bodyRt !== "null" ? bodyRt : undefined;
+
+  if (!validBodyRt && cookieToken) {
+    driverContext = { ...driverContext, spotifyRefreshToken: cookieToken };
+  } else if (validBodyRt) {
+    driverContext = { ...driverContext, spotifyRefreshToken: validBodyRt };
   }
 
   const response = await orchestrate(transcript, {

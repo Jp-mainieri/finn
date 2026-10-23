@@ -10,10 +10,13 @@ import { spotifyExecutors } from "./tools";
 export const SPOTIFY_KEYWORDS: readonly RegExp[] = [
   /\b(toca|tocar|toque|tocando|play)\b/,
   /\bplaylists?\b/,
-  /\b(musica|musicas|cancao|spotify|ouvir|ouve)\b/,
+  /\b(musica|musicas|cancao|cancoes|spotify|ouvir|ouve|ouca|escutar|escuta)\b/,
   /\b(pausa|pausar|pause|despausa|retoma|retomar)\b/,
   /\b(pula|pular|skip|proxima|avanca)\b/,
   /\bpara (a|o|essa|esse) (musica|som)\b/,
+  /\b(bota|botar|bote|coloca|colocar|coloque|poe|solta|soltar)\b.*\b(musica|musicas|cancao|som|playlist|playlists|faixa|album|disco|podcast|sertanejo|rock|pagode|samba|funk|pop|mpb|jazz|forro|axe|rap|trap|lofi)\b/,
+  /\b(sertanejo|pagode|rock nacional|funk|samba|mpb|lofi)\b/,
+  /\b(bota|coloca|solta) (um |uma |o )?(som|musica)\b/,
 ];
 
 export function spotifyFastSpeech(toolName: string, result: unknown): string | null {
@@ -72,7 +75,7 @@ export async function spotifyDeterministicFallback(input: AgentTaskInput): Promi
     // 3. Resume / Play current
     if (
       /\b(continua|continuar|despausa|despausar|retoma|retomar|volta a tocar)\b/.test(norm) ||
-      /^(toca|tocar|play|toca musica|toca uma musica|toca no spotify)$/.test(norm)
+      /^(toca|tocar|play|toca musica|toca uma musica|toca no spotify|coloca musica|coloca uma musica|bota musica|bota uma musica|bota som|solta o som|toca alguma coisa)$/.test(norm)
     ) {
       const out = await spotifyExecutors.toggle_playback({ action: "play" }, input);
       return {
@@ -103,9 +106,9 @@ export async function spotifyDeterministicFallback(input: AgentTaskInput): Promi
 
     // 5. Play a specific playlist or genre
     const playMatch = raw.match(
-      /(?:toca|tocar|toque|tocando|play|ouvir|ouve|coloque|coloca)\s+(?:a\s+playlist|uma\s+playlist\s+de|playlist\s+de|playlist|a\s+m[uú]sica|uma\s+m[uú]sica\s+de|m[uú]sica\s+de|m[uú]sicas?\s+de|o\s+som|som\s+de)?\s*(.+)/i,
+      /(?:toca|tocar|toque|tocando|play|ouvir|ouve|ouca|escutar|escuta|escute|coloque|coloca|bota|botar|bote|poe|solta|soltar)\s+(?:a\s+playlist|uma\s+playlist\s+de|playlist\s+de|playlist|a\s+m[uú]sica|uma\s+m[uú]sica\s+de|m[uú]sica\s+de|m[uú]sicas?\s+de|o\s+som|som\s+de|um\s+|uma\s+|o\s+|a\s+)?\s*(.+)/i,
     );
-    const candidate = (playMatch?.[1] ?? raw).replace(/\s+no\s+spotify$/i, "").trim();
+    const candidate = (playMatch?.[1] ?? raw).replace(/\s+no\s+spotify$/i, "").replace(/\s+pra\s+tocar$/i, "").trim();
     if (candidate) {
       const out = await spotifyExecutors.play_playlist({ playlist_name: candidate }, input);
       const res = out.result as {

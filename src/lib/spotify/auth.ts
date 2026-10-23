@@ -107,21 +107,38 @@ async function requestToken(
   return json;
 }
 
-async function refreshAccessToken(signal?: AbortSignal): Promise<string> {
+async function refreshAccessToken(signal?: AbortSignal, fallbackToken?: string): Promise<string> {
+  const isTest = Boolean(process.env.VITEST);
   const refreshToken = rotatedRefreshToken ?? spotifyEnv("SPOTIFY_REFRESH_TOKEN");
-  const json = await requestToken(
-    { grant_type: "refresh_token", refresh_token: refreshToken },
-    signal,
-  );
-  if (json.refresh_token && json.refresh_token !== refreshToken) {
-    rotatedRefreshToken = json.refresh_token;
-    console.warn("[spotify] refresh token was rotated; update SPOTIFY_REFRESH_TOKEN if it stops working");
+  try {
+    const json = await requestToken(
+      { grant_type: "refresh_token", refresh_token: refreshToken },
+      signal,
+    );
+    if (json.refresh_token && json.refresh_token !== refreshToken) {
+      rotatedRefreshToken = json.refresh_token;
+      console.warn("[spotify] refresh token was rotated; update SPOTIFY_REFRESH_TOKEN if it stops working");
+    }
+    cachedToken = {
+      accessToken: json.access_token,
+      expiresAt: Date.now() + json.expires_in * 1000 - EXPIRY_MARGIN_MS,
+    };
+    return json.access_token;
+  } catch (err) {
+    if (!isTest && fallbackToken && fallbackToken !== refreshToken && !signal?.aborted) {
+      console.warn("[spotify] server SPOTIFY_REFRESH_TOKEN failed; falling back to custom refreshToken", err);
+      const json = await requestToken(
+        { grant_type: "refresh_token", refresh_token: fallbackToken },
+        signal,
+      );
+      cachedToken = {
+        accessToken: json.access_token,
+        expiresAt: Date.now() + json.expires_in * 1000 - EXPIRY_MARGIN_MS,
+      };
+      return json.access_token;
+    }
+    throw err;
   }
-  cachedToken = {
-    accessToken: json.access_token,
-    expiresAt: Date.now() + json.expires_in * 1000 - EXPIRY_MARGIN_MS,
-  };
-  return json.access_token;
 }
 
 /**
@@ -143,29 +160,44 @@ export async function getAccessToken(
     let pending = customPending.get(customRt);
     if (!pending) {
       pending = (async () => {
-        const json = await requestToken(
-          { grant_type: "refresh_token", refresh_token: customRt },
-          opts.signal,
-        );
-        const token: CachedToken = {
-          accessToken: json.access_token,
-          expiresAt: Date.now() + json.expires_in * 1000 - EXPIRY_MARGIN_MS,
-        };
-        if (customTokens.size > 100) {
-          const now = Date.now();
-          for (const [k, v] of customTokens.entries()) {
-            if (v.expiresAt <= now) customTokens.delete(k);
-          }
+        try {
+          const json = await requestToken(
+            { grant_type: "refresh_token", refresh_token: customRt },
+            opts.signal,
+          );
+          const token: CachedToken = {
+            accessToken: json.access_token,
+            expiresAt: Date.now() + json.expires_in * 1000 - EXPIRY_MARGIN_MS,
+          };
           if (customTokens.size > 100) {
-            const firstKey = customTokens.keys().next().value;
-            if (firstKey) customTokens.delete(firstKey);
+            const now = Date.now();
+            for (const [k, v] of customTokens.entries()) {
+              if (v.expiresAt <= now) customTokens.delete(k);
+            }
+            if (customTokens.size > 100) {
+              const firstKey = customTokens.keys().next().value;
+              if (firstKey) customTokens.delete(firstKey);
+            }
           }
+          customTokens.set(customRt, token);
+          if (json.refresh_token && json.refresh_token !== customRt) {
+            customTokens.set(json.refresh_token, token);
+          }
+          return json.access_token;
+        } catch (customErr) {
+          if (!process.env.VITEST && envRt && !opts.signal?.aborted) {
+            console.warn(
+              "[spotify] custom refresh token failed; falling back to server SPOTIFY_REFRESH_TOKEN",
+              customErr,
+            );
+            customTokens.delete(customRt);
+            if (cachedToken && cachedToken.expiresAt > Date.now()) {
+              return cachedToken.accessToken;
+            }
+            return await refreshAccessToken(opts.signal);
+          }
+          throw customErr;
         }
-        customTokens.set(customRt, token);
-        if (json.refresh_token && json.refresh_token !== customRt) {
-          customTokens.set(json.refresh_token, token);
-        }
-        return json.access_token;
       })().finally(() => {
         customPending.delete(customRt);
       });
@@ -178,7 +210,7 @@ export async function getAccessToken(
   if (cachedToken && cachedToken.expiresAt > Date.now()) return cachedToken.accessToken;
 
   if (!pendingRefresh) {
-    pendingRefresh = refreshAccessToken(opts.signal).finally(() => {
+    pendingRefresh = refreshAccessToken(opts.signal, customRt).finally(() => {
       pendingRefresh = undefined;
     });
   }

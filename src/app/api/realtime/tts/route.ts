@@ -5,6 +5,68 @@ const OPENAI_SPEECH_URL = "https://api.openai.com/v1/audio/speech";
 const MAX_TEXT_LENGTH = 1200;
 const MAX_BODY_BYTES = 64 * 1024; // 64 KB limit
 
+/**
+ * Splits text into chunks suitable for TTS engines with length limits (e.g. Google Translate TTS <= 200 chars).
+ * Splits along natural sentence boundaries (.!?), then clause/punctuation boundaries (,;:),
+ * and finally word boundaries to ensure speech flows smoothly without breaking words.
+ */
+export function splitIntoTtsChunks(text: string, maxChunkLen = 180): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  if (trimmed.length <= maxChunkLen) return [trimmed];
+
+  const sentences = trimmed.split(/(?<=[.!?\n])\s+/);
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const sentence of sentences) {
+    if (!sentence) continue;
+    if (sentence.length > maxChunkLen) {
+      if (current) {
+        chunks.push(current);
+        current = "";
+      }
+      const subParts = sentence.split(/(?<=[,;:])\s+/);
+      for (const part of subParts) {
+        if (!part) continue;
+        if (part.length > maxChunkLen) {
+          const words = part.split(/\s+/);
+          for (const word of words) {
+            if (!word) continue;
+            if (word.length > maxChunkLen) {
+              if (current) {
+                chunks.push(current);
+                current = "";
+              }
+              for (let i = 0; i < word.length; i += maxChunkLen) {
+                chunks.push(word.slice(i, i + maxChunkLen));
+              }
+            } else if ((current ? current + " " + word : word).length <= maxChunkLen) {
+              current = current ? current + " " + word : word;
+            } else {
+              if (current) chunks.push(current);
+              current = word;
+            }
+          }
+        } else if ((current ? current + " " + part : part).length <= maxChunkLen) {
+          current = current ? current + " " + part : part;
+        } else {
+          if (current) chunks.push(current);
+          current = part;
+        }
+      }
+    } else if ((current ? current + " " + sentence : sentence).length <= maxChunkLen) {
+      current = current ? current + " " + sentence : sentence;
+    } else {
+      if (current) chunks.push(current);
+      current = sentence;
+    }
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
+}
+
 export async function POST(request: Request) {
   const denied = authorize(request);
   if (denied) return denied;
@@ -81,13 +143,29 @@ export async function POST(request: Request) {
     // Fallback in production when OpenAI TTS key is expired/unavailable so iOS WebAudio still receives MP3 bytes
     if (!process.env.VITEST) {
       try {
-        const googleTtsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=pt-BR&client=tw-ob&q=${encodeURIComponent(text.slice(0, 200))}`;
-        const fallbackRes = await fetch(googleTtsUrl, {
-          headers: { "User-Agent": "Mozilla/5.0" },
-        });
-        if (fallbackRes.ok) {
-          const fallbackBytes = await fallbackRes.arrayBuffer();
-          return new Response(fallbackBytes, {
+        const chunks = splitIntoTtsChunks(text, 180);
+        const chunkResponses = await Promise.all(
+          chunks.slice(0, 8).map(async (chunk) => {
+            const googleTtsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=pt-BR&client=tw-ob&q=${encodeURIComponent(chunk)}`;
+            const res = await fetch(googleTtsUrl, {
+              headers: { "User-Agent": "Mozilla/5.0" },
+            });
+            if (!res.ok) throw new Error(`Google TTS chunk failed: HTTP ${res.status}`);
+            const ab = await res.arrayBuffer();
+            return new Uint8Array(ab);
+          }),
+        );
+
+        if (chunkResponses.length > 0) {
+          const totalLength = chunkResponses.reduce((acc, c) => acc + c.byteLength, 0);
+          const combined = new Uint8Array(totalLength);
+          let offset = 0;
+          for (const c of chunkResponses) {
+            combined.set(c, offset);
+            offset += c.byteLength;
+          }
+
+          return new Response(combined.buffer, {
             status: 200,
             headers: {
               "Content-Type": "audio/mpeg",

@@ -106,4 +106,27 @@ describe("DelegationHandler", () => {
     expect(spoken).toEqual([["del_1", SPEECH.unavailable]]);
     expect(deps.onFailure).toHaveBeenCalledWith("server", "toca rock");
   });
+
+  it("recovers via fallback when fragments arrived with startMs >= offsetMs (timestamp jitter)", async () => {
+    const { handler, transcripts, bodies, spoken } = setup(reply({ speech: "Tocando Capital Inicial." }));
+    // Timestamp skew: fragment started at 2_050ms, but delegation was emitted at 2_000ms
+    transcripts.add({ delta: "toca Capital Inicial", startMs: 2_050, endMs: 2_500 });
+    await run(handler.handle({ id: "del_skew", offsetMs: 2_000 }));
+
+    expect(bodies()).toEqual([{ transcript: "toca Capital Inicial", contextId: "ctx" }]);
+    expect(spoken).toEqual([["del_skew", "Tocando Capital Inicial."]]);
+    expect(transcripts.peek()).toBe("");
+  });
+
+  it("drops stale unconsumed fragments from a previous turn separated by a large time gap", async () => {
+    const { handler, transcripts, bodies } = setup(reply({ speech: "Ok." }));
+    // Unconsumed fragment from 10 seconds ago
+    transcripts.add({ delta: "toca rock", startMs: 1_000, endMs: 1_500 });
+    // New utterance from current turn
+    transcripts.add({ delta: "pausa a música", startMs: 12_000, endMs: 12_800 });
+
+    await run(handler.handle({ id: "del_2", offsetMs: 13_000 }));
+    // Does NOT concatenate "toca rock pausa a música"; only the current turn is sent
+    expect(bodies()).toEqual([{ transcript: "pausa a música", contextId: "ctx" }]);
+  });
 });

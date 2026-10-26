@@ -23,7 +23,8 @@ Em `main`: nada. Em branches locais ou no PR #1: ver `ESTADO_ATUAL.md`. Entrega 
 - **Alto (A1):** erros do SDK expunham `command was: <corpo>` (chave de convite, driverId, IP). Corrigido: erro genérico `DriverStoreUnavailableError`, sem message/cause/stack do SDK.
 - **Médios e baixos:** timeout e retry (SDK ainda faz 2 tentativas com `retry:false`; usado `retries: 0`), `Number(null)=0` aprovando rate limit, fallback para o fake com `NODE_ENV=production`, assinatura base64url maleável, validação de `tv`/`exp`/`iat`, segredo fraco, validação de entradas, prefixo do rate limit, IPv6 /64. Todos corrigidos; detalhe por achado em `driver-store-core-2026-10-26.md`.
 - **Aprovados pelo dono e implementados (rodada 3):** pepper HMAC (`FINN_INVITE_PEPPER`, formato 64 hex, rejeitado se igual ao segredo de sessão) e `rotateSessions` atômico (Lua).
-- **Em fila para o dono:** M2 (credencial compartilhada) e B3 (vínculo de ambiente).
+- **M2 decidido (D1, opção b):** Redis de produção separado do de preview e dev. Executado em parte: `finn-upstash` reconectado só ao Production; o `finn-upstash-dev` exige etapa no navegador.
+- **Em fila para o dono:** B3 (vínculo de ambiente), com recomendação de não fazer.
 - **Sem achado:** comparação em tempo constante, atomicidade do Lua (lido linha a linha, hipótese sem interpretador), `driverId` com 128 bits, seleção do store falha fechada.
 
 ## Testes
@@ -53,6 +54,9 @@ Gerar `FINN_SESSION_SECRET` e `FINN_INVITE_PEPPER` por ambiente; autorizar push 
 
 ## Desvios
 
+- Segredos gerados e gravados na Vercel pelo orquestrador a pedido do dono ("configura tudo você"). Exceção consciente à regra 10 do padrão, com autorização explícita. Nenhum valor foi impresso. Redirecionei a saída do CLI para um arquivo temporário em `/tmp` (sem valores) em vez do scratchpad; removido ao fim.
+- A primeira gravação de `FINN_SESSION_SECRET` em production falhou (`action_required`/`missing_requirements`) e foi repetida com sucesso. Hipótese: falha transitória; não investigada.
+- Saídas de `vercel env ls` mostraram o prefixo truncado do valor das variáveis `Config`/Development. Para os segredos novos em Development isso é o prefixo do valor criptografado, não o segredo; mesmo assim passo a filtrar só nomes.
 - Leitura do `.env.local` (regra 4) na análise inicial: só nomes, valores redigidos; arquivo tinha apenas `VERCEL_OIDC_TOKEN`. Não repetido.
 - `vercel env ls` exibiu um prefixo truncado (cerca de 18 caracteres do cabeçalho codificado, igual em todos) dos valores das variáveis `KV_*` do tipo Config. Não é segredo útil, mas foi exibição de valor parcial; passo a usar só filtro por nome.
 - O commit `31db3ae` do agente `api` (rodada 3) incluiu este arquivo, que era do orquestrador e ainda não estava commitado. Fora do escopo dele e não relatado (ele declarou "nenhum desvio"). Sem dano; o histórico não foi reescrito. Daqui em diante, os documentos do orquestrador são commitados antes de acionar o agente, ou em branch separada.

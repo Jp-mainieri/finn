@@ -19,6 +19,8 @@ export interface DriverStore {
   createDriver(input: { label: string }): Promise<Driver>;
   getDriver(driverId: string): Promise<Driver | null>;
   revokeDriver(driverId: string): Promise<void>;
+  /** Owner-script only: every driver in the `drivers` index (id, label, status, createdAt; no secret), oldest first. */
+  listDrivers(): Promise<Driver[]>;
   /** Atomically increments tokenVersion of an ACTIVE driver (old tokens stop validating). No-op if missing/revoked. */
   rotateSessions(driverId: string): Promise<void>;
   /** `expiresAt` is epoch milliseconds (future, at most 1 year). `maxUses` 1..1000. */
@@ -53,6 +55,8 @@ const RATE_KEY_RE = /^ratelimit:[A-Za-z0-9:._-]{1,100}$/;
 export const keys = {
   driver: (prefix: string, driverId: string) => `${prefix}driver:${driverId}`,
   invite: (prefix: string, codeHash: string) => `${prefix}invite:${codeHash}`,
+  /** Set of every driverId (fed by createDriver and, inside the same EVAL, by the invite redeem). */
+  driversIndex: (prefix: string) => `${prefix}drivers`,
   spotifyIndex: (prefix: string, spotifyUserId: string) => `${prefix}spotify-index:${spotifyUserId}`,
   /** Only `ratelimit:`-prefixed keys with a restricted charset are accepted. */
   rateLimit: (prefix: string, key: string) => {

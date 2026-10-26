@@ -29,6 +29,24 @@ function setup() {
 }
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
 
+describe("MemoryDriverStore.listDrivers", () => {
+  it("lists drivers created directly and via redeem, oldest first, with status", async () => {
+    const { store, clock } = setup();
+    const a = await store.createDriver({ label: "A" });
+    clock.t += 10;
+    const { code } = await store.createInvite({ label: "B", maxUses: 1, expiresAt: T0 + 1000 });
+    const b = (await store.redeemInvite(code))!;
+    await store.revokeDriver(a.driverId);
+    const list = await store.listDrivers();
+    expect(list.map((d) => [d.driverId, d.label, d.status, d.createdAt])).toEqual([
+      [a.driverId, "A", "revoked", T0],
+      [b.driverId, "B", "active", T0 + 10],
+    ]);
+    list[0].label = "mutated";
+    expect((await store.listDrivers())[0].label).toBe("A");
+  });
+});
+
 describe("session token", () => {
   it("round-trips and expires at 90 days", async () => {
     const { store } = setup();
@@ -210,6 +228,7 @@ describe("createDriverStore env selection (fail closed)", () => {
 /** Mock Redis emulating the semantics of our 3 scripts; records every call. */
 function mockRedis() {
   const hashes = new Map<string, Record<string, string>>();
+  const sets = new Map<string, Set<string>>();
   const calls: { op: string; keys: string[] }[] = [];
   const redis: RedisLike = {
     async hgetall(key) {
@@ -222,6 +241,15 @@ function mockRedis() {
       hashes.set(key, { ...(hashes.get(key) ?? {}), ...v });
       return 1;
     },
+    async sadd(key, member) {
+      calls.push({ op: "sadd", keys: [key] });
+      sets.set(key, (sets.get(key) ?? new Set()).add(member));
+      return 1;
+    },
+    async smembers(key) {
+      calls.push({ op: "smembers", keys: [key] });
+      return [...(sets.get(key) ?? [])];
+    },
     async eval(script, ks, args) {
       calls.push({ op: script === REDEEM_SCRIPT ? "redeem" : script === REVOKE_SCRIPT ? "revoke" : "rl", keys: ks });
       if (script === REDEEM_SCRIPT) {
@@ -229,6 +257,7 @@ function mockRedis() {
         if (!inv || inv.revoked === "1" || Number(inv.uses) >= Number(inv.maxUses) || Number(inv.expiresAt) <= Number(args[0])) return [0];
         inv.uses = String(Number(inv.uses) + 1);
         hashes.set(ks[1], { driverId: args[1], label: inv.label, status: "active", tokenVersion: "1", createdAt: args[2] });
+        sets.set(ks[2], (sets.get(ks[2]) ?? new Set()).add(args[1]));
         return [1, inv.label];
       }
       if (script === REVOKE_SCRIPT) {
@@ -245,7 +274,7 @@ function mockRedis() {
       throw new Error("unexpected script");
     },
   };
-  return { redis, hashes, calls };
+  return { redis, hashes, sets, calls };
 }
 
 describe("UpstashDriverStore (mock client, no network)", () => {
@@ -313,6 +342,26 @@ describe("UpstashDriverStore (mock client, no network)", () => {
     expect((await store.getDriver(b.driverId))?.label).toBe("B");
     expect(await store.getDriver("drv_" + "Z".repeat(22))).toBeNull();
     expect(await store.getDriver("../x")).toBeNull();
+  });
+
+  it("listDrivers: index fed by createDriver and by the redeem EVAL (3rd key), no secret, skips dangling ids", async () => {
+    const { store, sets, calls, clock } = mk();
+    const a = await store.createDriver({ label: "A" });
+    clock.t = T0 + 5;
+    const { code } = await store.createInvite({ label: "B", maxUses: 1, expiresAt: T0 + 1000 });
+    const b = (await store.redeemInvite(code))!;
+    expect(calls.find((c) => c.op === "redeem")!.keys[2]).toBe("finn:preview:drivers");
+    expect([...sets.get("finn:preview:drivers")!].sort()).toEqual([a.driverId, b.driverId].sort());
+    sets.get("finn:preview:drivers")!.add("drv_" + "Q".repeat(22)); // dangling id
+    sets.get("finn:preview:drivers")!.add("../evil");
+    const list = await store.listDrivers();
+    expect(list.map((d) => d.driverId)).toEqual([a.driverId, b.driverId]);
+    expect(list.map((d) => d.label)).toEqual(["A", "B"]);
+    expect(JSON.stringify(list)).not.toMatch(/pepper|secret|token":/i);
+    expect(Object.keys(list[0]).sort()).toEqual(["createdAt", "driverId", "label", "status", "tokenVersion"]);
+    // a failed redeem adds nothing
+    expect(await store.redeemInvite(code)).toBeNull();
+    expect(sets.get("finn:preview:drivers")!.size).toBe(4);
   });
 
   it("rate limit counter increments", async () => {

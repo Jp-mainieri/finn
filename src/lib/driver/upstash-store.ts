@@ -21,12 +21,14 @@ import { assertPepper, generateDriverId, generateInviteCode, getInvitePepper, ha
 export interface RedisLike {
   hgetall(key: string): Promise<unknown>;
   hset(key: string, value: Record<string, string>): Promise<unknown>;
+  sadd(key: string, member: string): Promise<unknown>;
+  smembers(key: string): Promise<unknown>;
   eval(script: string, keys: string[], args: string[]): Promise<unknown>;
 }
 
 // Atomic redeem in ONE script (also the only round-trip, on every path, so success and
 // every failure cost the same): check state, increment uses and create the driver.
-// ARGV: now(ms), driverId, createdAt. Returns {1, label} on success, {0} otherwise.
+// KEYS: invite, driver, drivers index. ARGV: now(ms), driverId, createdAt. Returns {1, label} on success, {0} otherwise.
 export const REDEEM_SCRIPT = `
 local inv = redis.call('HMGET', KEYS[1], 'maxUses', 'uses', 'expiresAt', 'revoked', 'label')
 if not inv[1] or not inv[5] then return {0} end
@@ -35,6 +37,7 @@ if tonumber(inv[2]) >= tonumber(inv[1]) then return {0} end
 if tonumber(inv[3]) <= tonumber(ARGV[1]) then return {0} end
 redis.call('HINCRBY', KEYS[1], 'uses', 1)
 redis.call('HSET', KEYS[2], 'driverId', ARGV[2], 'label', inv[5], 'status', 'active', 'tokenVersion', '1', 'createdAt', ARGV[3])
+redis.call('SADD', KEYS[3], ARGV[2])
 return {1, inv[5]}
 `;
 
@@ -128,6 +131,8 @@ export class UpstashDriverStore implements DriverStore {
   async createDriver(input: { label: string }): Promise<Driver> {
     const label = normalizeLabel(input.label);
     const driver: Driver = { driverId: generateDriverId(), label, status: "active", tokenVersion: 1, createdAt: this.now() };
+    // Index first: an id without a hash is skipped by listDrivers, a hash without an id would be invisible.
+    await this.call(() => this.redis.sadd(keys.driversIndex(this.prefix), driver.driverId));
     await this.call(() =>
       this.redis.hset(keys.driver(this.prefix, driver.driverId), {
         driverId: driver.driverId,
@@ -138,6 +143,13 @@ export class UpstashDriverStore implements DriverStore {
       }),
     );
     return driver;
+  }
+
+  async listDrivers(): Promise<Driver[]> {
+    const raw = await this.call(() => this.redis.smembers(keys.driversIndex(this.prefix)));
+    if (!Array.isArray(raw) || raw.some((id) => typeof id !== "string")) throw new DriverStoreUnavailableError();
+    const found = await Promise.all((raw as string[]).filter(isValidDriverId).map((id) => this.getDriver(id)));
+    return found.filter((d): d is Driver => d !== null).sort((a, b) => a.createdAt - b.createdAt);
   }
 
   async getDriver(driverId: string): Promise<Driver | null> {
@@ -182,7 +194,7 @@ export class UpstashDriverStore implements DriverStore {
     const inviteKey = keys.invite(this.prefix, this.inviteHash(normalized));
     // Single EVAL, never retried by the client (retries are disabled in createRedisClient).
     const res = await this.call(() =>
-      this.redis.eval(REDEEM_SCRIPT, [inviteKey, keys.driver(this.prefix, driverId)], [String(now), driverId, String(now)]),
+      this.redis.eval(REDEEM_SCRIPT, [inviteKey, keys.driver(this.prefix, driverId), keys.driversIndex(this.prefix)], [String(now), driverId, String(now)]),
     );
     if (!Array.isArray(res) || res.length < 1) throw new DriverStoreUnavailableError();
     if (res[0] === 0) return null;

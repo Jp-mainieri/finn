@@ -63,6 +63,10 @@ export class MemoryDriverStore implements DriverStore {
     return { ...driver };
   }
 
+  async listDrivers(): Promise<Driver[]> {
+    return [...this.drivers.values()].map((d) => ({ ...d })).sort((a, b) => a.createdAt - b.createdAt);
+  }
+
   async getDriver(driverId: string): Promise<Driver | null> {
     if (!isValidDriverId(driverId)) return null;
     const d = this.drivers.get(driverId);

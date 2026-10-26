@@ -11,7 +11,13 @@
     "test:acceptance": "vitest run tests/acceptance",
     "test:live": "FINN_LIVE=1 node --env-file-if-exists=.env.local node_modules/vitest/vitest.mjs run tests/live",
     "test:smoke": "node tests/smoke/smoke.mjs",
-    "typecheck": "next typegen && tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit",
+    "invite:create": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --import ./scripts/lib/register-ts.mjs scripts/driver-admin.mjs invite:create",
+    "invite:revoke": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --import ./scripts/lib/register-ts.mjs scripts/driver-admin.mjs invite:revoke",
+    "driver:list": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --import ./scripts/lib/register-ts.mjs scripts/driver-admin.mjs driver:list",
+    "driver:revoke": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --import ./scripts/lib/register-ts.mjs scripts/driver-admin.mjs driver:revoke",
+    "driver:rotate": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --import ./scripts/lib/register-ts.mjs scripts/driver-admin.mjs driver:rotate",
+    "smoke:session": "node tests/smoke/session.mjs"
   },
   "dependencies": {
     "@picovoice/porcupine-web": "^4.0.1",

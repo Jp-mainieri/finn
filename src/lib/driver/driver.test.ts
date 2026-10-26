@@ -16,8 +16,8 @@ import {
 } from "./index";
 import { REDEEM_SCRIPT, RATELIMIT_SCRIPT, REVOKE_SCRIPT, type RedisLike } from "./upstash-store";
 
-const SECRET = "a".repeat(64);
-const OTHER = "b".repeat(64);
+const SECRET = "3f9a1c7e5b2d48806ae1f4c93d7b05e2a8c61f9d04b37e5a2c8d1f6039ab74ce";
+const OTHER = "9c04e7ab31d5f2866b0a9e3c71d84f5a20be6c13f7a95d482e0c1b3a6d7f9e84";
 const P = keyPrefix("test");
 const T0 = 1_800_000_000_000;
 
@@ -214,7 +214,7 @@ function mockRedis() {
     async hgetall(key) {
       calls.push({ op: "hgetall", keys: [key] });
       const h = hashes.get(key);
-      return h ? { ...h } : null;
+      return h ? Object.entries(h).flat() : [];
     },
     async hset(key, v) {
       calls.push({ op: "hset", keys: [key] });
@@ -225,12 +225,10 @@ function mockRedis() {
       calls.push({ op: script === REDEEM_SCRIPT ? "redeem" : script === REVOKE_SCRIPT ? "revoke" : "rl", keys: ks });
       if (script === REDEEM_SCRIPT) {
         const inv = hashes.get(ks[0]);
-        if (!inv || inv.revoked === "1" || Number(inv.uses) >= Number(inv.maxUses) || Number(inv.expiresAt) <= Number(args[0])) return 0;
+        if (!inv || inv.revoked === "1" || Number(inv.uses) >= Number(inv.maxUses) || Number(inv.expiresAt) <= Number(args[0])) return [0];
         inv.uses = String(Number(inv.uses) + 1);
-        const f: Record<string, string> = {};
-        for (let i = 1; i < args.length; i += 2) f[args[i]] = args[i + 1];
-        hashes.set(ks[1], f);
-        return 1;
+        hashes.set(ks[1], { driverId: args[1], label: inv.label, status: "active", tokenVersion: "1", createdAt: args[2] });
+        return [1, inv.label];
       }
       if (script === REVOKE_SCRIPT) {
         const h = hashes.get(ks[0]);

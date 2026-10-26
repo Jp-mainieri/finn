@@ -3,7 +3,8 @@ import {
   isValidDriverId,
   keys,
   validateInviteInput,
-  validateLabel,
+  normalizeLabel,
+  validateWindowSeconds,
   type Driver,
   type DriverStore,
 } from "./store";
@@ -41,10 +42,10 @@ export class MemoryDriverStore implements DriverStore {
   }
 
   async createDriver(input: { label: string }): Promise<Driver> {
-    validateLabel(input.label);
+    const label = normalizeLabel(input.label);
     const driver: Driver = {
       driverId: generateDriverId(),
-      label: input.label,
+      label,
       status: "active",
       tokenVersion: 1,
       createdAt: this.now(),
@@ -66,13 +67,13 @@ export class MemoryDriverStore implements DriverStore {
   }
 
   async createInvite(input: { label: string; maxUses: number; expiresAt: number }): Promise<{ code: string }> {
-    validateInviteInput(input);
+    const v = validateInviteInput(input, this.now());
     const code = generateInviteCode();
     this.invites.set(hashInviteCode(code), {
-      label: input.label,
-      maxUses: input.maxUses,
+      label: v.label,
+      maxUses: v.maxUses,
       uses: 0,
-      expiresAt: input.expiresAt,
+      expiresAt: v.expiresAt,
       createdAt: this.now(),
       revoked: false,
     });
@@ -97,6 +98,8 @@ export class MemoryDriverStore implements DriverStore {
   }
 
   async incrementRateLimit(key: string, windowSeconds: number): Promise<number> {
+    validateWindowSeconds(windowSeconds);
+    keys.rateLimit(this.prefix, key);
     const t = this.now();
     const c = this.counters.get(key);
     if (!c || c.resetAt <= t) {

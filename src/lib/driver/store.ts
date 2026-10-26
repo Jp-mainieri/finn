@@ -19,6 +19,7 @@ export interface DriverStore {
   createDriver(input: { label: string }): Promise<Driver>;
   getDriver(driverId: string): Promise<Driver | null>;
   revokeDriver(driverId: string): Promise<void>;
+  /** `expiresAt` is epoch milliseconds (future, at most 1 year). `maxUses` 1..1000. */
   createInvite(input: { label: string; maxUses: number; expiresAt: number }): Promise<{ code: string }>;
   /** Atomic. Null when invalid, exhausted, expired, revoked or unknown (indistinguishable). */
   redeemInvite(code: string): Promise<Driver | null>;
@@ -45,23 +46,61 @@ export function assertPrefix(prefix: string): void {
   if (!PREFIX_RE.test(prefix)) throw new Error("Invalid key prefix");
 }
 
+const RATE_KEY_RE = /^ratelimit:[A-Za-z0-9:._-]{1,100}$/;
+
 export const keys = {
   driver: (prefix: string, driverId: string) => `${prefix}driver:${driverId}`,
   invite: (prefix: string, codeHash: string) => `${prefix}invite:${codeHash}`,
   spotifyIndex: (prefix: string, spotifyUserId: string) => `${prefix}spotify-index:${spotifyUserId}`,
-  rateLimit: (prefix: string, key: string) => `${prefix}${key}`,
+  /** Only `ratelimit:`-prefixed keys with a restricted charset are accepted. */
+  rateLimit: (prefix: string, key: string) => {
+    if (typeof key !== "string" || !RATE_KEY_RE.test(key)) throw new Error("Invalid rate limit key");
+    return `${prefix}${key}`;
+  },
 };
 
-export function validateInviteInput(input: { label: string; maxUses: number; expiresAt: number }): void {
-  if (typeof input.label !== "string" || input.label.length === 0 || input.label.length > 80) {
-    throw new Error("Invalid invite label");
+/** Generic error for any Redis failure. Never carries SDK message, cause, command, key or token. */
+export class DriverStoreUnavailableError extends Error {
+  constructor() {
+    super("Driver store unavailable");
+    this.name = "DriverStoreUnavailableError";
   }
-  if (!Number.isInteger(input.maxUses) || input.maxUses < 1) throw new Error("Invalid maxUses");
-  if (!Number.isFinite(input.expiresAt)) throw new Error("Invalid expiresAt");
 }
 
-export function validateLabel(label: string): void {
-  if (typeof label !== "string" || label.length === 0 || label.length > 80) {
-    throw new Error("Invalid driver label");
+export const MAX_INVITE_USES = 1000;
+export const MAX_INVITE_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
+export const MAX_RATE_WINDOW_SECONDS = 86_400;
+
+// Control chars (C0, DEL, C1), which also covers NUL, newline and the ESC of ANSI sequences.
+// eslint-disable-next-line no-control-regex
+const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/;
+
+/** Trims and validates a label (1..64 chars, no control characters). Returns the trimmed label. */
+export function normalizeLabel(label: string): string {
+  if (typeof label !== "string") throw new Error("Invalid label");
+  const t = label.trim();
+  if (t.length < 1 || t.length > 64 || CONTROL_RE.test(t)) throw new Error("Invalid label");
+  return t;
+}
+
+/**
+ * `expiresAt` is epoch MILLISECONDS, in the future and at most 1 year ahead.
+ * `maxUses` is an integer 1..1000.
+ */
+export function validateInviteInput(
+  input: { label: string; maxUses: number; expiresAt: number },
+  nowMs: number,
+): { label: string; maxUses: number; expiresAt: number } {
+  const label = normalizeLabel(input.label);
+  if (!Number.isInteger(input.maxUses) || input.maxUses < 1 || input.maxUses > MAX_INVITE_USES) {
+    throw new Error("Invalid maxUses");
   }
+  if (!Number.isFinite(input.expiresAt) || input.expiresAt <= nowMs || input.expiresAt > nowMs + MAX_INVITE_LIFETIME_MS) {
+    throw new Error("Invalid expiresAt (epoch milliseconds, in the future, at most 1 year)");
+  }
+  return { label, maxUses: input.maxUses, expiresAt: input.expiresAt };
+}
+
+export function validateWindowSeconds(w: number): void {
+  if (!Number.isInteger(w) || w < 1 || w > MAX_RATE_WINDOW_SECONDS) throw new Error("Invalid windowSeconds");
 }

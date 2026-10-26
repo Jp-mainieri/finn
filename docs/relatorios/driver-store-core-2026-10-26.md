@@ -35,3 +35,12 @@ Testes: `npm test` 431 passaram, 4 ignorados, 0 falharam (antes 403); `src/lib/d
 | Por ordem, não feito | pepper/HMAC do convite (M3), rotateSessions (M1), vínculo de ambiente no token (B3), credencial do Redis (M2) | aguardam o dono |
 
 Não verificado: Lua segue sem rodar em Redis real (hipótese); o formato REST do fake foi derivado do código do SDK 1.40.0, não de resposta real do Upstash (hipótese). `redeemInvite` e demais métodos agora lançam `DriverStoreUnavailableError` em falha de Redis; a entrega 2 deve tratar como negação/erro falável.
+
+## Rodada 3: pepper e rotateSessions
+Testes: `npm test` 442 passaram, 4 ignorados, 0 falharam (antes 431); 11 novos (63 em `src/lib/driver`); typecheck e lint limpos.
+
+- **Pepper:** chave do convite = `invite:<HMAC-SHA256(FINN_INVITE_PEPPER, código normalizado)>` (`hashInviteCode(code, pepper)`), nos dois stores. O Lua não calcula hash (recebe a chave pronta em KEYS), então não mudou. Formato igual ao do segredo de sessão (64 hex, >= 8 distintos) e rejeitado se igual a `FINN_SESSION_SECRET` quando essa variável está definida (a checagem só enxerga o env; um pepper injetado igual a um segredo de sessão passado só por parâmetro não é detectável, hipótese de uso). Erros nunca trazem os valores.
+- **Escolha de injeção:** pepper opcional como 4º argumento do construtor (`new MemoryDriverStore(prefix, now, pepper)`; idem Upstash). Sem ele, lê `FINN_INVITE_PEPPER` de forma preguiçosa, só em createInvite/redeemInvite/revokeInvite; assim `createDriver`/`getDriver`/`authenticateSession` não exigem pepper, e produção sem a variável falha fechada (lança) ao usar convites, não no boot. `createDriverStore` não mudou de assinatura. Testes existentes passaram a injetar o pepper no construtor (nenhum afrouxado).
+- **rotateSessions(driverId):** na interface e nos dois stores. Upstash: `ROTATE_SCRIPT` (EXISTS + HGET status == active + HINCRBY, atômico); revogado/inexistente/id inválido não faz nada nem cria hash. Testado em memória e no SDK real com fetch falso: token antigo falha, novo passa, driver segue active, 25 rotações concorrentes dão tv+25, isolamento A x B.
+- **Não verificado:** Lua de rotate em Redis real (hipótese; o fake emula a semântica).
+- **Impacto na entrega 2:** o script de convites (`invite:create|invite:revoke`) e o `.env` de cada ambiente precisam de `FINN_INVITE_PEPPER` (distinto por ambiente, diferente de `FINN_SESSION_SECRET`); trocá-lo invalida todos os convites emitidos. `driver:revoke` pode oferecer `rotateSessions`.

@@ -16,10 +16,12 @@ import {
   signSessionToken,
   verifySessionToken,
 } from "./index";
-import { REDEEM_SCRIPT, RATELIMIT_SCRIPT, REVOKE_SCRIPT, hashToRecord } from "./upstash-store";
+import { REDEEM_SCRIPT, RATELIMIT_SCRIPT, REVOKE_SCRIPT, ROTATE_SCRIPT, hashToRecord } from "./upstash-store";
 import { createHmac } from "node:crypto";
 
 const SECRET = "3f9a1c7e5b2d48806ae1f4c93d7b05e2a8c61f9d04b37e5a2c8d1f6039ab74ce";
+const PEPPER = "c2b7d95e01f84a36b9d0e7a15c4f8823e6a91b07d3f5c8e24a0b69d1f7c3e5a8";
+const PEPPER2 = "17e4a9c06b3d85f2a0c9e1b74d6f3a58c0b2e7d91f46a3c85e0d7b29f1a4c6e3";
 const T0 = 1_800_000_000_000;
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const VALID_ID = "drv_" + "A".repeat(22);
@@ -82,6 +84,14 @@ function fakeUpstash(opts: { failWith?: { status: number; error: string }; hang?
           if (h) h[args[0]] = args[1];
           return reply(1);
         }
+        if (script === ROTATE_SCRIPT) {
+          const h = hashes.get(ks[0]);
+          if (h && h.status === "active") {
+            h.tokenVersion = String(Number(h.tokenVersion) + 1);
+            return reply(1);
+          }
+          return reply(0);
+        }
         if (script === RATELIMIT_SCRIPT) {
           const v = (counters.get(ks[0]) ?? 0) + 1;
           counters.set(ks[0], v);
@@ -98,7 +108,7 @@ function fakeUpstash(opts: { failWith?: { status: number; error: string }; hang?
 
 const P = keyPrefix("preview");
 const real = (timeoutMs?: number) =>
-  new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok-secret-xyz", timeoutMs), P, () => T0);
+  new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok-secret-xyz", timeoutMs), P, () => T0, PEPPER);
 
 describe("real @upstash/redis SDK against a fake REST endpoint (no network)", () => {
   it("createDriver -> getDriver -> invite -> redeem -> auth works end to end", async () => {
@@ -127,7 +137,7 @@ describe("real @upstash/redis SDK against a fake REST endpoint (no network)", ()
     expect(commands.filter((c) => c[0] === "eval" && c[1] === REDEEM_SCRIPT)).toHaveLength(3);
     for (const k of hashes.keys()) expect(k.startsWith("finn:preview:")).toBe(true);
     expect(JSON.stringify(commands)).not.toContain(code);
-    expect(JSON.stringify(commands)).toContain(hashInviteCode(code));
+    expect(JSON.stringify(commands)).toContain(hashInviteCode(code, PEPPER));
   });
 
   it("does not send telemetry headers and makes exactly one attempt per command", async () => {
@@ -167,7 +177,7 @@ describe("real @upstash/redis SDK against a fake REST endpoint (no network)", ()
     for (const e of errs) {
       expect(e).toBeInstanceOf(DriverStoreUnavailableError);
       const dump = `${e.message} ${e.stack} ${String(e.cause)} ${JSON.stringify(e)}`;
-      for (const secret of ["command was", "finn:preview", hashInviteCode(code), code, "tok-secret-xyz", VALID_ID, "9.9.9.9", "WRONGTYPE", "invite:", "driver:"]) {
+      for (const secret of ["command was", "finn:preview", hashInviteCode(code, PEPPER), code, "tok-secret-xyz", VALID_ID, "9.9.9.9", "WRONGTYPE", "invite:", "driver:"]) {
         expect(dump).not.toContain(secret);
       }
       expect(e.cause).toBeUndefined();
@@ -230,13 +240,13 @@ describe("hashToRecord", () => {
 describe("rate limit validation and keys", () => {
   it.each([0, -1, 1.5, NaN, Infinity, 86_401])("windowSeconds %s throws (memory and upstash)", async (w) => {
     fakeUpstash();
-    await expect(new MemoryDriverStore(P, () => T0).incrementRateLimit("ratelimit:redeem:a", w)).rejects.toThrow();
+    await expect(new MemoryDriverStore(P, () => T0, PEPPER).incrementRateLimit("ratelimit:redeem:a", w)).rejects.toThrow();
     await expect(real().incrementRateLimit("ratelimit:redeem:a", w)).rejects.toThrow();
   });
   it("only ratelimit: keys with restricted charset", async () => {
     fakeUpstash();
     for (const k of ["driver:abc", "ratelimit:", "ratelimit:a b", "ratelimit:a\n", "x:ratelimit:a", "ratelimit:" + "a".repeat(101)]) {
-      await expect(new MemoryDriverStore(P, () => T0).incrementRateLimit(k, 60)).rejects.toThrow();
+      await expect(new MemoryDriverStore(P, () => T0, PEPPER).incrementRateLimit(k, 60)).rejects.toThrow();
       await expect(real().incrementRateLimit(k, 60)).rejects.toThrow();
     }
   });
@@ -251,7 +261,7 @@ describe("rate limit validation and keys", () => {
     }
   });
   it("no-IP bucket is small (3)", async () => {
-    const store = new MemoryDriverStore(P, () => T0);
+    const store = new MemoryDriverStore(P, () => T0, PEPPER);
     const r: boolean[] = [];
     for (let i = 0; i < 5; i++) r.push(await checkRedeemRateLimit(store, undefined));
     expect(r.filter(Boolean)).toHaveLength(3);
@@ -261,7 +271,7 @@ describe("rate limit validation and keys", () => {
 describe("input validation (memory and upstash)", () => {
   const stores = () => {
     fakeUpstash();
-    return [new MemoryDriverStore(P, () => T0), real()];
+    return [new MemoryDriverStore(P, () => T0, PEPPER), real()];
   };
   it("labels: trimmed, 1..64, no control chars", async () => {
     for (const s of stores()) {
@@ -340,7 +350,7 @@ describe("session token hardening", () => {
     expect(getSessionSecret()).toBe(SECRET);
   });
   it("authenticateSession rejects a driver whose stored id differs from sub", async () => {
-    const store = new MemoryDriverStore(P, () => T0);
+    const store = new MemoryDriverStore(P, () => T0, PEPPER);
     const d = await store.createDriver({ label: "A" });
     const tok = signSessionToken({ driverId: d.driverId, tokenVersion: 1 }, SECRET, T0);
     const liar = { ...store, getDriver: async () => ({ ...d, driverId: "drv_" + "C".repeat(22) }) } as unknown as MemoryDriverStore;
@@ -369,5 +379,126 @@ describe("store selection", () => {
     const prod = await import("./index");
     expect(() => prod.getDriverStore()).toThrow(/not configured/);
     expect(() => prod.getDriverStore()).toThrow(/not configured/); // failure is not cached as success
+  });
+});
+
+describe("invite pepper", () => {
+  const memory = (pepper?: string) => new MemoryDriverStore(P, () => T0, pepper);
+
+  it("keys are HMAC(pepper, code): never the clear code nor plain sha256, in both stores", async () => {
+    const { createHash } = await import("node:crypto");
+    const { hashes, commands } = fakeUpstash();
+    const store = real();
+    const { code } = await store.createInvite({ label: "A", maxUses: 1, expiresAt: T0 + 1000 });
+    const plain = createHash("sha256").update(code).digest("hex");
+    const dump = JSON.stringify([[...hashes.entries()], commands]);
+    expect(dump).not.toContain(code);
+    expect(dump).not.toContain(plain);
+    expect(dump).toContain(hashInviteCode(code, PEPPER));
+    const mem = memory(PEPPER);
+    const m = await mem.createInvite({ label: "A", maxUses: 1, expiresAt: T0 + 1000 });
+    const keysDump = JSON.stringify(mem.allKeys());
+    expect(keysDump).not.toContain(m.code);
+    expect(keysDump).not.toContain(createHash("sha256").update(m.code).digest("hex"));
+    expect(keysDump).toContain(hashInviteCode(m.code, PEPPER));
+  });
+
+  it("different peppers give different keys; redeem under another pepper is null like unknown", async () => {
+    expect(hashInviteCode("FINN-ABCD-EFGH", PEPPER)).not.toBe(hashInviteCode("FINN-ABCD-EFGH", PEPPER2));
+    const a = memory(PEPPER);
+    const { code } = await a.createInvite({ label: "A", maxUses: 1, expiresAt: T0 + 1000 });
+    expect(await memory(PEPPER2).redeemInvite(code)).toBeNull();
+
+    fakeUpstash();
+    const up = (p: string) => new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "t"), P, () => T0, p);
+    const up1 = up(PEPPER);
+    const c2 = await up1.createInvite({ label: "A", maxUses: 1, expiresAt: T0 + 1000 });
+    expect(await up(PEPPER2).redeemInvite(c2.code)).toBeNull();
+    expect(await up1.redeemInvite(c2.code)).not.toBeNull();
+  });
+
+  it("pepper format, independence from session secret, and fail closed when missing", async () => {
+    vi.stubEnv("FINN_SESSION_SECRET", SECRET);
+    expect(() => memory(SECRET)).toThrow(/differ/);
+    expect(() => memory("a".repeat(64))).toThrow();
+    expect(() => memory("short")).toThrow();
+    expect(() => hashInviteCode("FINN-ABCD-EFGH", "x")).toThrow();
+    // lazy env: missing pepper only fails when an invite operation runs
+    vi.stubEnv("FINN_INVITE_PEPPER", "");
+    const lazy = memory();
+    await expect(lazy.createDriver({ label: "ok" })).resolves.toBeDefined();
+    await expect(lazy.createInvite({ label: "A", maxUses: 1, expiresAt: T0 + 1000 })).rejects.toThrow(/FINN_INVITE_PEPPER/);
+    await expect(lazy.redeemInvite("FINN-ABCD-EFGH")).rejects.toThrow();
+    vi.stubEnv("FINN_INVITE_PEPPER", SECRET);
+    await expect(lazy.createInvite({ label: "A", maxUses: 1, expiresAt: T0 + 1000 })).rejects.toThrow(/differ/);
+    vi.stubEnv("FINN_INVITE_PEPPER", PEPPER);
+    await expect(lazy.createInvite({ label: "A", maxUses: 1, expiresAt: T0 + 1000 })).resolves.toBeDefined();
+  });
+
+  it("errors never contain the pepper or secret values", () => {
+    vi.stubEnv("FINN_SESSION_SECRET", SECRET);
+    for (const bad of [SECRET, "zz"]) {
+      try {
+        hashInviteCode("FINN-ABCD-EFGH", bad);
+      } catch (e) {
+        expect(String((e as Error).message)).not.toContain(SECRET);
+      }
+    }
+  });
+});
+
+describe("rotateSessions", () => {
+  const kinds = () => {
+    fakeUpstash();
+    return { memory: new MemoryDriverStore(P, () => T0, PEPPER), sdk: real() };
+  };
+
+  it.each(["memory", "sdk"] as const)("%s: old token fails, new passes, driver stays active", async (kind) => {
+    const s = kinds()[kind];
+    const d = await s.createDriver({ label: "A" });
+    const old = signSessionToken({ driverId: d.driverId, tokenVersion: d.tokenVersion }, SECRET, T0);
+    expect(await authenticateSession(old, s, SECRET, T0)).not.toBeNull();
+    await s.rotateSessions(d.driverId);
+    expect(await authenticateSession(old, s, SECRET, T0)).toBeNull();
+    const after = (await s.getDriver(d.driverId))!;
+    expect(after.status).toBe("active");
+    expect(after.tokenVersion).toBe(d.tokenVersion + 1);
+    const fresh = signSessionToken({ driverId: d.driverId, tokenVersion: after.tokenVersion }, SECRET, T0);
+    expect((await authenticateSession(fresh, s, SECRET, T0))?.driverId).toBe(d.driverId);
+  });
+
+  it.each(["memory", "sdk"] as const)("%s: concurrent rotates lose no increments", async (kind) => {
+    const s = kinds()[kind];
+    const d = await s.createDriver({ label: "A" });
+    await Promise.all(Array.from({ length: 25 }, () => s.rotateSessions(d.driverId)));
+    expect((await s.getDriver(d.driverId))?.tokenVersion).toBe(d.tokenVersion + 25);
+  });
+
+  it.each(["memory", "sdk"] as const)("%s: revoked/unknown/invalid ids change and create nothing; A x B isolated", async (kind) => {
+    const k = kinds();
+    const s = k[kind];
+    const a = await s.createDriver({ label: "A" });
+    const b = await s.createDriver({ label: "B" });
+    await s.rotateSessions(a.driverId);
+    expect((await s.getDriver(b.driverId))?.tokenVersion).toBe(b.tokenVersion);
+    await s.revokeDriver(b.driverId);
+    await s.rotateSessions(b.driverId);
+    expect((await s.getDriver(b.driverId))?.tokenVersion).toBe(b.tokenVersion);
+    const ghost = "drv_" + "Q".repeat(22);
+    await s.rotateSessions(ghost);
+    await s.rotateSessions("../x");
+    expect(await s.getDriver(ghost)).toBeNull();
+    if (kind === "memory") expect((s as MemoryDriverStore).allKeys().filter((x) => x.includes(ghost))).toHaveLength(0);
+  });
+
+  it("sdk: no phantom hash and generic error on redis failure / bad reply", async () => {
+    const { hashes } = fakeUpstash();
+    const s = real();
+    await s.rotateSessions("drv_" + "Q".repeat(22));
+    expect(hashes.size).toBe(0);
+    fakeUpstash({ evalResult: null });
+    await expect(real().rotateSessions(VALID_ID)).rejects.toBeInstanceOf(DriverStoreUnavailableError);
+    fakeUpstash({ failWith: { status: 500, error: "x" } });
+    await expect(real().rotateSessions(VALID_ID)).rejects.toBeInstanceOf(DriverStoreUnavailableError);
   });
 });

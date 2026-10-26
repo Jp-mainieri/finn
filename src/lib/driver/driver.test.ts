@@ -17,13 +17,14 @@ import {
 import { REDEEM_SCRIPT, RATELIMIT_SCRIPT, REVOKE_SCRIPT, type RedisLike } from "./upstash-store";
 
 const SECRET = "3f9a1c7e5b2d48806ae1f4c93d7b05e2a8c61f9d04b37e5a2c8d1f6039ab74ce";
+const PEPPER = "c2b7d95e01f84a36b9d0e7a15c4f8823e6a91b07d3f5c8e24a0b69d1f7c3e5a8";
 const OTHER = "9c04e7ab31d5f2866b0a9e3c71d84f5a20be6c13f7a95d482e0c1b3a6d7f9e84";
 const P = keyPrefix("test");
 const T0 = 1_800_000_000_000;
 
 function setup() {
   const clock = { t: T0 };
-  const store = new MemoryDriverStore(P, () => clock.t);
+  const store = new MemoryDriverStore(P, () => clock.t, PEPPER);
   return { clock, store };
 }
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
@@ -139,7 +140,7 @@ describe("invites (memory store)", () => {
     const { store } = setup();
     const { code } = await store.createInvite({ label: "A", maxUses: 1, expiresAt: T0 + 1000 });
     expect(store.allKeys().some((k) => k.includes(code))).toBe(false);
-    expect(store.allKeys()).toContain(`${P}invite:${hashInviteCode(code)}`);
+    expect(store.allKeys()).toContain(`${P}invite:${hashInviteCode(code, PEPPER)}`);
     expect(await store.redeemInvite(`  ${code.toLowerCase()} `)).not.toBeNull();
   });
 
@@ -251,7 +252,7 @@ describe("UpstashDriverStore (mock client, no network)", () => {
   const mk = () => {
     const m = mockRedis();
     const clock = { t: T0 };
-    return { ...m, clock, store: new UpstashDriverStore(m.redis, keyPrefix("preview"), () => clock.t) };
+    return { ...m, clock, store: new UpstashDriverStore(m.redis, keyPrefix("preview"), () => clock.t, PEPPER) };
   };
 
   it("maps every key under finn:<env>: and never stores the code in clear", async () => {
@@ -265,7 +266,7 @@ describe("UpstashDriverStore (mock client, no network)", () => {
     expect(all.length).toBeGreaterThan(0);
     expect(all.every((k) => k.startsWith("finn:preview:"))).toBe(true);
     expect(all).toContain(`finn:preview:driver:${d.driverId}`);
-    expect(all).toContain(`finn:preview:invite:${hashInviteCode(code)}`);
+    expect(all).toContain(`finn:preview:invite:${hashInviteCode(code, PEPPER)}`);
     expect(all).toContain("finn:preview:ratelimit:redeem:1.1.1.1");
     expect(JSON.stringify([...hashes.entries()])).not.toContain(code);
     expect(all.some((k) => k.includes(code))).toBe(false);

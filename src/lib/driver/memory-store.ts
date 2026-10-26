@@ -8,7 +8,7 @@ import {
   type Driver,
   type DriverStore,
 } from "./store";
-import { generateDriverId, generateInviteCode, hashInviteCode, normalizeInviteCode } from "./invite";
+import { assertPepper, generateDriverId, generateInviteCode, getInvitePepper, hashInviteCode, normalizeInviteCode } from "./invite";
 
 interface InviteRecord {
   label: string;
@@ -28,8 +28,17 @@ export class MemoryDriverStore implements DriverStore {
   constructor(
     private readonly prefix: string,
     private readonly now: () => number = Date.now,
+    pepper?: string,
   ) {
     assertPrefix(prefix);
+    if (pepper !== undefined) assertPepper(pepper);
+    this.pepper = pepper;
+  }
+
+  /** Injected pepper (tests) or, lazily, FINN_INVITE_PEPPER. Only invite operations need it. */
+  private readonly pepper: string | undefined;
+  private inviteHash(code: string): string {
+    return hashInviteCode(code, this.pepper ?? getInvitePepper());
   }
 
   /** Test helper: every logical key currently held, fully prefixed. */
@@ -66,10 +75,16 @@ export class MemoryDriverStore implements DriverStore {
     if (d) d.status = "revoked";
   }
 
+  async rotateSessions(driverId: string): Promise<void> {
+    if (!isValidDriverId(driverId)) return;
+    const d = this.drivers.get(driverId);
+    if (d && d.status === "active") d.tokenVersion += 1;
+  }
+
   async createInvite(input: { label: string; maxUses: number; expiresAt: number }): Promise<{ code: string }> {
     const v = validateInviteInput(input, this.now());
     const code = generateInviteCode();
-    this.invites.set(hashInviteCode(code), {
+    this.invites.set(this.inviteHash(code), {
       label: v.label,
       maxUses: v.maxUses,
       uses: 0,
@@ -83,7 +98,7 @@ export class MemoryDriverStore implements DriverStore {
   async redeemInvite(code: string): Promise<Driver | null> {
     const normalized = normalizeInviteCode(code);
     if (!normalized) return null;
-    const inv = this.invites.get(hashInviteCode(normalized));
+    const inv = this.invites.get(this.inviteHash(normalized));
     // Check-and-increment has no await in between: atomic on the event loop.
     if (!inv || inv.revoked || inv.uses >= inv.maxUses || inv.expiresAt <= this.now()) return null;
     inv.uses += 1;
@@ -93,7 +108,7 @@ export class MemoryDriverStore implements DriverStore {
   async revokeInvite(code: string): Promise<void> {
     const normalized = normalizeInviteCode(code);
     if (!normalized) return;
-    const inv = this.invites.get(hashInviteCode(normalized));
+    const inv = this.invites.get(this.inviteHash(normalized));
     if (inv) inv.revoked = true;
   }
 

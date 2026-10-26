@@ -9,7 +9,7 @@ import {
   type Driver,
   type DriverStore,
 } from "./store";
-import { generateDriverId, generateInviteCode, hashInviteCode, normalizeInviteCode } from "./invite";
+import { assertPepper, generateDriverId, generateInviteCode, getInvitePepper, hashInviteCode, normalizeInviteCode } from "./invite";
 
 /**
  * Minimal surface of the @upstash/redis client used here (tests may inject a mock).
@@ -42,6 +42,15 @@ return {1, inv[5]}
 export const REVOKE_SCRIPT = `
 if redis.call('EXISTS', KEYS[1]) == 1 then redis.call('HSET', KEYS[1], ARGV[1], ARGV[2]) end
 return 1
+`;
+
+// Atomic tokenVersion bump, only for an existing ACTIVE driver (no phantom hash).
+export const ROTATE_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 1 and redis.call('HGET', KEYS[1], 'status') == 'active' then
+  redis.call('HINCRBY', KEYS[1], 'tokenVersion', 1)
+  return 1
+end
+return 0
 `;
 
 // INCR + EXPIRE atomically; also repairs a counter that lost its TTL.
@@ -94,8 +103,17 @@ export class UpstashDriverStore implements DriverStore {
     private readonly redis: RedisLike,
     private readonly prefix: string,
     private readonly now: () => number = Date.now,
+    pepper?: string,
   ) {
     assertPrefix(prefix);
+    if (pepper !== undefined) assertPepper(pepper);
+    this.pepper = pepper;
+  }
+
+  /** Injected pepper (tests) or, lazily, FINN_INVITE_PEPPER. Only invite operations need it. */
+  private readonly pepper: string | undefined;
+  private inviteHash(code: string): string {
+    return hashInviteCode(code, this.pepper ?? getInvitePepper());
   }
 
   /** Every Redis access goes through here: any failure becomes a generic, secret-free error. */
@@ -134,11 +152,17 @@ export class UpstashDriverStore implements DriverStore {
     await this.call(() => this.redis.eval(REVOKE_SCRIPT, [keys.driver(this.prefix, driverId)], ["status", "revoked"]));
   }
 
+  async rotateSessions(driverId: string): Promise<void> {
+    if (!isValidDriverId(driverId)) return;
+    const r = await this.call(() => this.redis.eval(ROTATE_SCRIPT, [keys.driver(this.prefix, driverId)], []));
+    if (r !== 0 && r !== 1) throw new DriverStoreUnavailableError();
+  }
+
   async createInvite(input: { label: string; maxUses: number; expiresAt: number }): Promise<{ code: string }> {
     const v = validateInviteInput(input, this.now());
     const code = generateInviteCode();
     await this.call(() =>
-      this.redis.hset(keys.invite(this.prefix, hashInviteCode(code)), {
+      this.redis.hset(keys.invite(this.prefix, this.inviteHash(code)), {
         label: v.label,
         maxUses: String(v.maxUses),
         uses: "0",
@@ -155,7 +179,7 @@ export class UpstashDriverStore implements DriverStore {
     if (!normalized) return null;
     const driverId = generateDriverId();
     const now = this.now();
-    const inviteKey = keys.invite(this.prefix, hashInviteCode(normalized));
+    const inviteKey = keys.invite(this.prefix, this.inviteHash(normalized));
     // Single EVAL, never retried by the client (retries are disabled in createRedisClient).
     const res = await this.call(() =>
       this.redis.eval(REDEEM_SCRIPT, [inviteKey, keys.driver(this.prefix, driverId)], [String(now), driverId, String(now)]),
@@ -170,7 +194,7 @@ export class UpstashDriverStore implements DriverStore {
     const normalized = normalizeInviteCode(code);
     if (!normalized) return;
     await this.call(() =>
-      this.redis.eval(REVOKE_SCRIPT, [keys.invite(this.prefix, hashInviteCode(normalized))], ["revoked", "1"]),
+      this.redis.eval(REVOKE_SCRIPT, [keys.invite(this.prefix, this.inviteHash(normalized))], ["revoked", "1"]),
     );
   }
 

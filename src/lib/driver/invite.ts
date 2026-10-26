@@ -1,4 +1,6 @@
-import { createHash, randomBytes, randomInt } from "node:crypto";
+import { createHmac, randomBytes, randomInt } from "node:crypto";
+import { requireEnv } from "../env";
+import { isAcceptableSecret } from "./session-token";
 import { isIP } from "node:net";
 import type { DriverStore } from "./store";
 
@@ -27,8 +29,30 @@ export function normalizeInviteCode(raw: string): string | null {
   return CODE_RE.test(code) ? code : null;
 }
 
-export function hashInviteCode(normalizedCode: string): string {
-  return createHash("sha256").update(normalizedCode).digest("hex");
+/**
+ * Invite key hash: HMAC-SHA256(FINN_INVITE_PEPPER, normalized code), hex.
+ * The pepper has the same strict format as FINN_SESSION_SECRET (64 hex, >= 8 distinct
+ * chars) and MUST differ from it. Rotating the pepper invalidates every issued invite.
+ */
+export function hashInviteCode(normalizedCode: string, pepper: string): string {
+  assertPepper(pepper);
+  return createHmac("sha256", pepper).update(normalizedCode).digest("hex");
+}
+
+/** Validates format and independence from FINN_SESSION_SECRET. Errors never contain values. */
+export function assertPepper(pepper: unknown): asserts pepper is string {
+  if (!isAcceptableSecret(pepper)) throw new Error("Invalid invite pepper (expected 64 hex characters, random)");
+  const session = process.env.FINN_SESSION_SECRET;
+  if (session && session.toLowerCase() === pepper.toLowerCase()) {
+    throw new Error("Invite pepper must differ from the session secret");
+  }
+}
+
+/** Reads FINN_INVITE_PEPPER; fails closed when missing or invalid, in every environment. */
+export function getInvitePepper(): string {
+  const pepper = requireEnv("FINN_INVITE_PEPPER");
+  assertPepper(pepper);
+  return pepper;
 }
 
 export const REDEEM_RATE_LIMIT = { max: 10, windowSeconds: 600 } as const;

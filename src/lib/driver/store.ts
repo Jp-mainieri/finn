@@ -19,6 +19,8 @@ export interface DriverStore {
   createDriver(input: { label: string }): Promise<Driver>;
   getDriver(driverId: string): Promise<Driver | null>;
   revokeDriver(driverId: string): Promise<void>;
+  /** Atomically increments tokenVersion of an ACTIVE driver (old tokens stop validating). No-op if missing/revoked. */
+  rotateSessions(driverId: string): Promise<void>;
   /** `expiresAt` is epoch milliseconds (future, at most 1 year). `maxUses` 1..1000. */
   createInvite(input: { label: string; maxUses: number; expiresAt: number }): Promise<{ code: string }>;
   /** Atomic. Null when invalid, exhausted, expired, revoked or unknown (indistinguishable). */

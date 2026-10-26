@@ -17,6 +17,7 @@ Status: **aprovado pelo dono em 2026-10-26** (com convites por script local). De
 - **Chaves**
   - `driver:<driverId>` → `{ driverId, label, status: "active"|"revoked", tokenVersion, createdAt, spotifyUserId? }`
   - `invite:<hmac-sha256(FINN_INVITE_PEPPER, codigo)>` → `{ label, maxUses, uses, expiresAt, createdAt, revoked }` (o código em claro nunca é guardado; o HMAC com segredo de servidor impede força bruta offline a partir de um dump do Redis)
+  - `drivers` → conjunto de `driverId` (alimentado no mesmo EVAL do resgate; permite o `driver:list`)
   - `spotify-index:<spotifyUserId>` → `driverId` (reservado; usado na entrega 4)
   - `ratelimit:redeem:<ip>` → contador com TTL
 - **Convite**: `FINN-XXXX-XXXX`, alfabeto sem caracteres ambíguos, resgate **atômico** (não pode ultrapassar `maxUses` sob corrida).
@@ -30,6 +31,7 @@ interface DriverStore {
   createDriver(input: { label: string }): Promise<Driver>;
   getDriver(driverId: string): Promise<Driver | null>;
   revokeDriver(driverId: string): Promise<void>;
+  listDrivers(): Promise<Driver[]>; // índice `drivers` (SADD no resgate); usado só pelo script do dono: id, label, status, createdAt; nunca segredo
   rotateSessions(driverId: string): Promise<void>; // incrementa tokenVersion: invalida todos os tokens antigos sem banir o motorista
   createInvite(input: { label: string; maxUses: number; expiresAt: number }): Promise<{ code: string }>;
   redeemInvite(code: string): Promise<Driver | null>; // atômico; null se inválido/esgotado/expirado/revogado
@@ -81,4 +83,6 @@ Rate limit geral por motorista, métricas, OAuth do Spotify como login (opção 
 
 - 2026-10-26: aprovado com convites por script local (opção A).
 - 2026-10-26: adições aprovadas pelo dono após security-review da entrega 1: pepper HMAC no hash do convite e `rotateSessions` (baratas agora, caras depois que houver convites emitidos).
-- Em fila para decisão do dono: credencial do Redis separada para produção (M2); vínculo de ambiente no payload do token (B3).
+- M2 (credencial do Redis separada) decidido e revertido: um Redis só, por custo (ver `ESTADO_ATUAL.md`).
+- 2026-10-26: `listDrivers()` e índice `drivers` adicionados pelo orquestrador (adição mecânica à decisão A: sem listagem o dono não tem como saber qual `driverId` revogar). Sem decisão de produto envolvida.
+- 2026-10-26: B3 (vínculo de ambiente no token) fechado como **não fazer**: segredos de sessão distintos por ambiente já impedem token de preview em produção.

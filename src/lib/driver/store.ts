@@ -72,7 +72,6 @@ export const MAX_INVITE_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
 export const MAX_RATE_WINDOW_SECONDS = 86_400;
 
 // Control chars (C0, DEL, C1), which also covers NUL, newline and the ESC of ANSI sequences.
-// eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/;
 
 /** Trims and validates a label (1..64 chars, no control characters). Returns the trimmed label. */

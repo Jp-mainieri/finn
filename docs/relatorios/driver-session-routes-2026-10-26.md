@@ -31,3 +31,24 @@
 - `tests/acceptance/auth.test.ts`: o caso "503 com FINN_API_TOKEN não configurado" passou a esperar 401 para `/api/orchestrator` (agora via `authorizeDriver`; legado desligado/sem token nunca casa) e continua 503 para `/api/agents/*`. Continua falhando fechado; nenhum teste removido.
 - Testes de rota e harness (`tests/helpers/harness.ts`, `route.test.ts` das 3 rotas realtime) ganharam `FINN_LEGACY_TOKEN_ENABLED=1`, porque usam o token compartilhado.
 - `Cache-Control: no-store` e corpo falável em português nas respostas de `/api/session` (adição minha).
+
+## Rodada de correções (qa + security-review)
+Testes: `npm test` 533 passaram, 4 ignorados, 0 falharam (antes 493, +40; nenhum removido ou afrouxado). `npm run typecheck`, `npm run lint`, `npm run build` limpos.
+
+| Item | Estado | Como |
+|---|---|---|
+| 1 `--env-file` (qa N1, sec M1) | corrigido | flag `--env-file <caminho>` no CLI (`process.loadEnvFile`); caminho inexistente é recusado; teste com arquivo temporário criado no teste. Observação: o próprio Node intercepta `--env-file` em qualquer posição do argv, então para caminho inexistente quem recusa é o Node ("not found", exit 9) antes do CLI; o mesmo vale para variáveis já presentes no ambiente, que vencem as do arquivo |
+| 1 `invite:revoke` (sec M2) | corrigido | sem argumento, pede o código sem eco (TTY) ou lê a 1ª linha do stdin; argv ainda aceito, mas desaconselhado. `revokeInvite` devolve boolean (memory e Upstash; `REVOKE_SCRIPT` devolve 1/0 no mesmo Lua, sem criar chave); script diz "Convite não encontrado (confira o código e o --env/pepper)" com exit 1 |
+| 1 sem TTY | corrigido | `driver:revoke`/`driver:rotate` sem terminal exigem `--yes`, recusam com mensagem e exit 1, sem prompt |
+| 2 pepper (qa N2) | corrigido | `createInvite`/`revokeInvite` do Upstash calculam a chave FORA de `call()`; erro de pepper continua distinto de `DriverStoreUnavailableError` e o script imprime "Pepper ausente ou inválido para este ambiente" (sem valor) |
+| 3 `getClientIp` | corrigido | divide por vírgula, valida cada candidato com `isIP`, aceita IP puro, `ip:porta`, `[v6]`/`[v6]:porta`; inválido passa ao próximo; lixo vira `noip`. Testes de precedência incluídos |
+| 4 `/api/session` | corrigido | 415 se `Content-Type` não é `application/json` (aceita charset/caixa); 413 por Content-Length e por leitura limitada a 2048 bytes; ambos antes de qualquer Redis (teste conta as chamadas) |
+| 5 legado | corrigido | sha256 dos dois lados + `timingSafeEqual`. `authorize()` (agents) não foi tocado |
+| 6 Lua TYPE (qa N7) | corrigido | `TYPE` do índice `drivers` conferido (set ou none) antes de `HINCRBY`/`HSET`/`SADD`; erro sem mutar. Testado no caminho SDK com fetch falso (usos continuam 0, nenhum driver criado) e na ordem do texto do Lua |
+| 7 `listDrivers` | corrigido | hash corrompido, id inválido ou ausente é PULADO; falha de rede continua lançando. `listDriversDetailed()` (novo na interface, devolve `skipped`) alimenta o aviso do `driver:list` |
+| 8 smoke | corrigido | só `https://` (http só localhost/127.0.0.1); host que não termina em `.vercel.app` e não é localhost conta como produção (`PREVIEW_HOST_SUFFIX` em `tests/smoke/session-args.mjs`) e exige `--allow-production`; orquestrador só com `--with-orchestrator`; recomenda `npm run -s` |
+| 9 docs | corrigido | `.env.example` e este relatório |
+
+Não corrigido por ordem: idempotência do resgate (B4), balde global/Firewall (A3), `/api/agents/*` (A2), dono no store (A1), uso de `driverId` no orquestrador (C1, entrega 3/4).
+Desvios: `listDriversDetailed` foi adicionado à interface `DriverStore` e `revokeInvite` mudou de `void` para `boolean` (pedido pelo orquestrador); o contrato em `docs/contratos` não foi editado.
+Continua não verificado: Lua em Redis real (inclui `TYPE` e o `REVOKE_SCRIPT` 1/0), cabeçalhos de IP da Vercel, o CLI contra Upstash real, leitura sem eco em TTY real (só a lógica de TTY foi exercitada com injeção; o ramo de stdin não-TTY e `process.loadEnvFile` rodaram de verdade).

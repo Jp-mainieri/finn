@@ -3,19 +3,32 @@
  * Owner's manual smoke against a PREVIEW deployment: redeems an invite for real, so it
  * is also the first time the redeem Lua runs on a real Redis.
  *
- *   npm run smoke:session -- <baseUrl> <inviteCode>
+ *   npm run -s smoke:session -- <baseUrl> <inviteCode> [--with-orchestrator] [--allow-production]
+ *
+ * Refuses non-https URLs (http only for localhost/127.0.0.1) and any host that does not
+ * end in .vercel.app and is not localhost (treated as production) unless --allow-production.
+ * The invite code is consumed on use and sits in your shell history: prefer a 1-use invite.
+ * By default it only redeems and calls GET /api/session. --with-orchestrator also calls
+ * /api/orchestrator ("pausa a música"), which may act on the Spotify configured on the server.
  *
  * Env (optional): VERCEL_AUTOMATION_BYPASS_SECRET for previews behind Deployment Protection.
- * Steps: POST /api/session, GET /api/session, POST /api/orchestrator ("pausa a música").
  * Prints only PASSOU/FALHOU and the HTTP status per step. Never prints the token, the code
- * or any response body. The orchestrator step may act on the driver's Spotify.
+ * or any response body. The driver it creates stays active: revoke it with driver:list / driver:revoke.
  */
-const [baseArg, inviteCode] = process.argv.slice(2);
-if (!baseArg || !inviteCode) {
-  console.error("Uso: npm run smoke:session -- <baseUrl> <inviteCode>");
+import { checkTarget, parseSmokeArgs } from "./session-args.mjs";
+
+const parsed = parseSmokeArgs(process.argv.slice(2));
+if (parsed.error) {
+  console.error(parsed.error);
   process.exit(2);
 }
-const base = baseArg.replace(/\/+$/, "");
+const refusal = checkTarget(parsed.baseUrl, { allowProduction: parsed.allowProduction });
+if (refusal) {
+  console.error(refusal);
+  process.exit(2);
+}
+const { inviteCode, withOrchestrator } = parsed;
+const base = parsed.baseUrl.replace(/\/+$/, "");
 const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 
 async function call(method, path, { token, body } = {}) {
@@ -56,8 +69,12 @@ if (typeof token === "string") {
   const who = await call("GET", "/api/session", { token });
   report("GET /api/session (token vale)", who.status === 200 && who.json?.driverId === driverId, who.status);
 
-  const orch = await call("POST", "/api/orchestrator", { token, body: { transcript: "pausa a música" } });
-  report("POST /api/orchestrator (com o token)", orch.status === 200, orch.status);
+  if (withOrchestrator) {
+    const orch = await call("POST", "/api/orchestrator", { token, body: { transcript: "pausa a música" } });
+    report("POST /api/orchestrator (com o token)", orch.status === 200, orch.status);
+  } else {
+    console.log("PULADO  POST /api/orchestrator (use --with-orchestrator)");
+  }
 
   const bad = await call("GET", "/api/session", { token: `${token.slice(0, -2)}xx` });
   report("GET /api/session com token adulterado é recusado", bad.status === 401, bad.status);
@@ -65,4 +82,5 @@ if (typeof token === "string") {
   console.log("Passos seguintes não executados: sem token.");
 }
 
+if (typeof token === "string") console.log("O motorista criado continua ativo: revogue com driver:list e driver:revoke.");
 process.exit(failed ? 1 : 0);

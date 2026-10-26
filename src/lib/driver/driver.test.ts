@@ -47,6 +47,17 @@ describe("MemoryDriverStore.listDrivers", () => {
   });
 });
 
+describe("MemoryDriverStore.revokeInvite", () => {
+  it("returns true for an existing invite, false for unknown or malformed", async () => {
+    const { store } = setup();
+    const { code } = await store.createInvite({ label: "I", maxUses: 1, expiresAt: T0 + 1000 });
+    expect(await store.revokeInvite(code)).toBe(true);
+    expect(await store.revokeInvite(generateInviteCode())).toBe(false);
+    expect(await store.revokeInvite("zzz")).toBe(false);
+    expect((await store.listDriversDetailed()).skipped).toBe(0);
+  });
+});
+
 describe("session token", () => {
   it("round-trips and expires at 90 days", async () => {
     const { store } = setup();
@@ -262,7 +273,8 @@ function mockRedis() {
       }
       if (script === REVOKE_SCRIPT) {
         const h = hashes.get(ks[0]);
-        if (h) h[args[0]] = args[1];
+        if (!h) return 0;
+        h[args[0]] = args[1];
         return 1;
       }
       if (script === RATELIMIT_SCRIPT) {
@@ -362,6 +374,61 @@ describe("UpstashDriverStore (mock client, no network)", () => {
     // a failed redeem adds nothing
     expect(await store.redeemInvite(code)).toBeNull();
     expect(sets.get("finn:preview:drivers")!.size).toBe(4);
+  });
+
+  it("listDrivers skips corrupt hashes (odd field count, bad status, dangling id) and counts them", async () => {
+    const { store, redis, hashes, sets } = mk();
+    const good = await store.createDriver({ label: "Good" });
+    const odd = await store.createDriver({ label: "Odd" });
+    const badStatus = await store.createDriver({ label: "Bad" });
+    hashes.get(`finn:preview:driver:${badStatus.driverId}`)!.status = "weird";
+    sets.get("finn:preview:drivers")!.add("drv_" + "Q".repeat(22)); // dangling
+    sets.get("finn:preview:drivers")!.add("not-an-id");
+    const wrapped: RedisLike = {
+      ...redis,
+      hgetall: async (key) => (key.endsWith(odd.driverId) ? ["a", "b", "c"] : redis.hgetall(key)),
+    };
+    const s2 = new UpstashDriverStore(wrapped, keyPrefix("preview"), () => T0, PEPPER);
+    const r = await s2.listDriversDetailed();
+    expect(r.drivers.map((d) => d.driverId)).toEqual([good.driverId]);
+    expect(r.skipped).toBe(4);
+    expect((await s2.listDrivers()).map((d) => d.driverId)).toEqual([good.driverId]);
+    // a network failure is NOT swallowed as corruption
+    const down: RedisLike = { ...redis, hgetall: async () => { throw new Error("net"); } };
+    await expect(new UpstashDriverStore(down, keyPrefix("preview"), () => T0, PEPPER).listDrivers()).rejects.toThrow(/unavailable/i);
+  });
+
+  it("revokeInvite returns whether the invite existed and never creates one", async () => {
+    const { store, hashes } = mk();
+    const { code } = await store.createInvite({ label: "I", maxUses: 1, expiresAt: T0 + 1000 });
+    const before = hashes.size;
+    expect(await store.revokeInvite(code)).toBe(true);
+    expect(await store.revokeInvite(code)).toBe(true);
+    expect(await store.revokeInvite(generateInviteCode())).toBe(false);
+    expect(await store.revokeInvite("not a code")).toBe(false);
+    expect(hashes.size).toBe(before);
+  });
+
+  it("a missing pepper is its own error, never 'Redis unavailable', and nothing is written", async () => {
+    const m = mockRedis();
+    const noPepper = new UpstashDriverStore(m.redis, keyPrefix("preview"), () => T0);
+    const prev = process.env.FINN_INVITE_PEPPER;
+    delete process.env.FINN_INVITE_PEPPER;
+    try {
+      for (const op of [
+        () => noPepper.createInvite({ label: "A", maxUses: 1, expiresAt: T0 + 1000 }),
+        () => noPepper.revokeInvite("FINN-ABCD-EFGH"),
+        () => noPepper.redeemInvite("FINN-ABCD-EFGH"),
+      ]) {
+        const e = await op().then(() => null, (x: Error) => x);
+        expect(e).toBeInstanceOf(Error);
+        expect(e!.name).not.toBe("DriverStoreUnavailableError");
+        expect(e!.message).toMatch(/FINN_INVITE_PEPPER/);
+      }
+      expect(m.hashes.size).toBe(0);
+    } finally {
+      if (prev !== undefined) process.env.FINN_INVITE_PEPPER = prev;
+    }
   });
 
   it("rate limit counter increments", async () => {

@@ -36,7 +36,7 @@ afterEach(() => {
  * Fake Upstash REST endpoint for the REAL SDK: speaks the real wire format
  * (POST body = command array, reply {result}), HGETALL as a flat array.
  */
-function fakeUpstash(opts: { failWith?: { status: number; error: string }; hang?: boolean; evalResult?: unknown } = {}) {
+function fakeUpstash(opts: { indexWrongType?: boolean; failWith?: { status: number; error: string }; hang?: boolean; evalResult?: unknown } = {}) {
   const hashes = new Map<string, Record<string, string>>();
   const counters = new Map<string, number>();
   const sets = new Map<string, Set<string>>();
@@ -82,6 +82,7 @@ function fakeUpstash(opts: { failWith?: { status: number; error: string }; hang?
           if (!inv || inv.revoked === "1" || Number(inv.uses) >= Number(inv.maxUses) || Number(inv.expiresAt) <= Number(args[0])) {
             return reply([0]);
           }
+          if (opts.indexWrongType) return new Response(JSON.stringify({ error: "WRONGTYPE drivers index" }), { status: 400 });
           inv.uses = String(Number(inv.uses) + 1);
           hashes.set(ks[1], { driverId: args[1], label: inv.label, status: "active", tokenVersion: "1", createdAt: args[2] });
           sets.set(ks[2], (sets.get(ks[2]) ?? new Set()).add(args[1]));
@@ -89,7 +90,8 @@ function fakeUpstash(opts: { failWith?: { status: number; error: string }; hang?
         }
         if (script === REVOKE_SCRIPT) {
           const h = hashes.get(ks[0]);
-          if (h) h[args[0]] = args[1];
+          if (!h) return reply(0);
+          h[args[0]] = args[1];
           return reply(1);
         }
         if (script === ROTATE_SCRIPT) {
@@ -166,6 +168,32 @@ describe("real @upstash/redis SDK against a fake REST endpoint (no network)", ()
       [b.driverId, "B", "revoked"],
     ]);
     expect(JSON.stringify(list)).not.toContain(code);
+  });
+
+  it("redeem aborts WITHOUT mutating when the drivers index has the wrong type (TYPE checked before any write)", async () => {
+    const { hashes } = fakeUpstash({ indexWrongType: true });
+    const store = real();
+    const { code } = await store.createInvite({ label: "B", maxUses: 1, expiresAt: T0 + 60_000 });
+    const key = [...hashes.keys()].find((k) => k.includes(":invite:"))!;
+    await expect(store.redeemInvite(code)).rejects.toBeInstanceOf(DriverStoreUnavailableError);
+    expect(hashes.get(key)!.uses).toBe("0");
+    expect([...hashes.keys()].some((k) => k.includes(":driver:"))).toBe(false);
+    const lua = REDEEM_SCRIPT;
+    expect(lua.indexOf("TYPE")).toBeGreaterThan(-1);
+    expect(lua.indexOf("TYPE")).toBeLessThan(lua.indexOf("HINCRBY"));
+    expect(lua.indexOf("TYPE")).toBeLessThan(lua.indexOf("SADD"));
+    expect(lua.indexOf("TYPE")).toBeLessThan(lua.indexOf("HSET"));
+  });
+
+  it("revokeInvite through the real SDK: true/false, never creates a hash", async () => {
+    const { hashes } = fakeUpstash();
+    const store = real();
+    const { code } = await store.createInvite({ label: "B", maxUses: 1, expiresAt: T0 + 60_000 });
+    const n = hashes.size;
+    expect(await store.revokeInvite(code)).toBe(true);
+    expect(await store.revokeInvite("FINN-ABCD-EFGH")).toBe(false);
+    expect(hashes.size).toBe(n);
+    expect(await store.redeemInvite(code)).toBeNull();
   });
 
   it("listDrivers fails closed on a malformed SMEMBERS reply and on SDK errors", async () => {

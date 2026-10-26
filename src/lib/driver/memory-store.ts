@@ -64,7 +64,12 @@ export class MemoryDriverStore implements DriverStore {
   }
 
   async listDrivers(): Promise<Driver[]> {
-    return [...this.drivers.values()].map((d) => ({ ...d })).sort((a, b) => a.createdAt - b.createdAt);
+    return (await this.listDriversDetailed()).drivers;
+  }
+
+  async listDriversDetailed(): Promise<{ drivers: Driver[]; skipped: number }> {
+    const drivers = [...this.drivers.values()].map((d) => ({ ...d })).sort((a, b) => a.createdAt - b.createdAt);
+    return { drivers, skipped: 0 };
   }
 
   async getDriver(driverId: string): Promise<Driver | null> {
@@ -109,11 +114,13 @@ export class MemoryDriverStore implements DriverStore {
     return this.createDriver({ label: inv.label });
   }
 
-  async revokeInvite(code: string): Promise<void> {
+  async revokeInvite(code: string): Promise<boolean> {
     const normalized = normalizeInviteCode(code);
-    if (!normalized) return;
+    if (!normalized) return false;
     const inv = this.invites.get(this.inviteHash(normalized));
-    if (inv) inv.revoked = true;
+    if (!inv) return false;
+    inv.revoked = true;
+    return true;
   }
 
   async incrementRateLimit(key: string, windowSeconds: number): Promise<number> {

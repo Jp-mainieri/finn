@@ -21,13 +21,16 @@ export interface DriverStore {
   revokeDriver(driverId: string): Promise<void>;
   /** Owner-script only: every driver in the `drivers` index (id, label, status, createdAt; no secret), oldest first. */
   listDrivers(): Promise<Driver[]>;
+  /** Same as listDrivers plus how many index entries were skipped (invalid id, missing or corrupt hash). */
+  listDriversDetailed(): Promise<{ drivers: Driver[]; skipped: number }>;
   /** Atomically increments tokenVersion of an ACTIVE driver (old tokens stop validating). No-op if missing/revoked. */
   rotateSessions(driverId: string): Promise<void>;
   /** `expiresAt` is epoch milliseconds (future, at most 1 year). `maxUses` 1..1000. */
   createInvite(input: { label: string; maxUses: number; expiresAt: number }): Promise<{ code: string }>;
   /** Atomic. Null when invalid, exhausted, expired, revoked or unknown (indistinguishable). */
   redeemInvite(code: string): Promise<Driver | null>;
-  revokeInvite(code: string): Promise<void>;
+  /** True when the invite existed and is now revoked (or already was); false when not found or malformed. Never creates anything. */
+  revokeInvite(code: string): Promise<boolean>;
   /** Increments a counter scoped by `key` and returns the new value; TTL set on first hit of the window. */
   incrementRateLimit(key: string, windowSeconds: number): Promise<number>;
 }

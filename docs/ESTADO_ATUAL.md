@@ -8,7 +8,7 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 - `main` limpo e sincronizado. 379 testes passam (4 pulados live), typecheck e lint limpos (2026-10-26).
 - Sem CI. Lote completo roda localmente, uma vez por branch.
 - Persistência: nenhuma durável em `main`. Endereços ditados vivem na memória da função (somem no cold start).
-- Upstash for Redis provisionado pelo dono em 2026-10-26 (`finn-upstash`, plano Free). Em 2026-10-26 (decisão D1, opção b) a conexão foi separada: `finn-upstash` ficou ligado **só ao Production**; um segundo banco `finn-upstash-dev` deve ligar a **Preview e Development** (ver "Pendências do dono": a criação pede uma etapa no navegador). Variáveis: `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `KV_REST_API_READ_ONLY_TOKEN`, `KV_URL`, `REDIS_URL`. Até o segundo banco existir, Preview e Development ficam sem Redis (nada em `main` usa o Redis ainda).
+- Upstash for Redis (`finn-upstash`, plano Free) provisionado pelo dono em 2026-10-26, ligado a Production, Preview e Development: **um banco só, mesma credencial**. Tentativa de separar (D1 opção b) foi revertida no mesmo dia, ver Decisões provisórias. Variáveis: `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `KV_REST_API_READ_ONLY_TOKEN`, `KV_URL`, `REDIS_URL`.
 - `FINN_SESSION_SECRET` e `FINN_INVITE_PEPPER` configurados na Vercel pelo orquestrador (autorização do dono, 2026-10-26): 6 valores distintos (um par por ambiente), gerados com `openssl rand -hex 32` e enviados por pipe sem exibição. Production e Preview são `Sensitive`; Development não pode ser (limite da Vercel) e fica legível por `vercel env pull` para quem tem acesso ao projeto.
 - Etapa 1, entrega 1 (núcleo `src/lib/driver/`): implementada e corrigida após qa e security-review, em `feat/driver-store-core` (local, sem PR ainda). Relatórios: [`relatorios/driver-store-core-2026-10-26.md`](./relatorios/driver-store-core-2026-10-26.md), [`revisoes/driver-store-core-security-review.md`](./revisoes/driver-store-core-security-review.md), [`relatorios/orquestrador-2026-10-26.md`](./relatorios/orquestrador-2026-10-26.md). Rodada 3 (pepper do convite e `rotateSessions`) concluída: 442 testes passam, typecheck e lint limpos. Falta: push e PR (aguarda OK do dono), depois entrega 2.
 - PRs: #1 adoção do padrão (aberto, sem merge). Entrega 1 empilha sobre #1 e sobre a branch do contrato.
@@ -21,11 +21,15 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 - 2026-10-26: ordem de evolução: (1) Redis + `DriverProfile` + identidade, (2) memória curta da viagem, (3) lugares dinâmicos e aliases, depois rate limit e observabilidade antes de abrir o beta, (4) Modo Rotina. Camada 4 do plano espera.
 - 2026-10-26: o beta será aberto a outras pessoas, mas só com acesso controlado pelo dono.
 
-- 2026-10-26 (D1): credencial do Redis separada, opção (b): um banco para produção, outro para preview e dev. O dono pode reabrir se o motivo for segurança.
 - 2026-10-26: após o security-review da entrega 1, o dono aprovou duas adições ao contrato: pepper HMAC (`FINN_INVITE_PEPPER`) no hash do convite e `rotateSessions` (incrementa `tokenVersion` sem banir o motorista). Motivo: baratas agora, caras depois de haver convites emitidos.
 - 2026-10-26: decisões técnicas do agente aceitas (provisórias, ajustáveis por parâmetro): rate limit do resgate 10 por 600 s por IP; IP ausente ou inválido cai num balde próprio de 3 por 600 s; teto de espera do Redis 2 s sem retry (o EVAL de resgate nunca é retentado); tempo em ms em `expiresAt`, em s em `iat`/`exp`.
 
 ## Decisões provisórias
+
+- **Redis único (D1, 2026-10-26):** o dono escolheu primeiro separar o banco de produção (opção b), mas o plano Free do Upstash permite **1 banco por conta** e um segundo exigiria Pay as You Go. O dono não quer gastar nada por enquanto, então ficou **um banco para os 3 ambientes**, separados só pelo prefixo `finn:<env>:`.
+  - Controles compensatórios já em vigor: `FINN_SESSION_SECRET` e `FINN_INVITE_PEPPER` distintos por ambiente (um token ou convite de preview não valida em produção); prefixo de chave por ambiente; `NODE_ENV=production` nunca usa o fake.
+  - Risco aceito: um bug ou vazamento da credencial em preview alcança as chaves de produção (security-review M2). Não usar convites reais em preview.
+  - Reabre se: houver orçamento para um segundo banco (Pay as You Go com teto de gasto via `vercel integration resource create-threshold`), ou antes de abrir o beta a usuários reais, o que vier primeiro.
 
 - **Identidade (opção B, 2026-10-26):** `driverId` opaco gerado pelo servidor; token de sessão assinado, emitido em troca de código de convite criado e revogável pelo dono. O Spotify ID é só atributo ligado ao perfil (índice `spotify:<id> → driverId`). Substitui o `FINN_API_TOKEN` compartilhado.
   - Convites criados e revogados por script local rodado pelo dono (sem rota de admin). Contrato aprovado em 2026-10-26: [`contratos/identidade-e-perfil.md`](./contratos/identidade-e-perfil.md).
@@ -63,7 +67,6 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 ## Pendências do dono
 
 - [ ] Provisionar Upstash Redis (Marketplace da Vercel, região `gru1`) e avisar quando as variáveis estiverem no projeto. O agente só precisa dos nomes.
-- [ ] **Concluir no navegador a criação do `finn-upstash-dev`** (região e plano), ligado a Preview e Development. Depois, `vercel integration list` deve mostrar dois recursos.
 - [x] `FINN_SESSION_SECRET` e `FINN_INVITE_PEPPER`: feitos (ver Estado). Trocar o pepper invalida todos os convites emitidos.
 - [ ] Mais tarde: `FINN_TOKEN_ENC_KEY` (entrega 4) e `FINN_LEGACY_TOKEN_ENABLED=1` (transitório, entrega 2).
 - [ ] OK de merge de cada PR (ordem: #1, depois as entregas empilhadas).
@@ -71,4 +74,4 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 
 ## Em aberto (do dono), em ordem de importância
 
-1. **B3, vínculo de ambiente no payload do token** (muda o contrato). Prioridade baixa: com o Redis de produção separado (D1), o token de preview não valida em produção de qualquer forma, porque o `driverId` não existe lá; vira redundante. Recomendação: não fazer.
+1. **B3, vínculo de ambiente no payload do token** (muda o contrato). Prioridade baixa: os segredos de sessão já são distintos por ambiente, então um token de preview não valida em produção. Recomendação: não fazer.

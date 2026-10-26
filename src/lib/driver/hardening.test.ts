@@ -156,7 +156,7 @@ describe("real @upstash/redis SDK against a fake REST endpoint (no network)", ()
     const b = (await store.redeemInvite(code))!;
     expect([...sets.get("finn:preview:drivers")!].sort()).toEqual([a.driverId, b.driverId].sort());
     const redeem = commands.find((c) => c[0] === "eval" && c[1] === REDEEM_SCRIPT)!;
-    expect(redeem[2]).toBe("3");
+    expect(redeem[2]).toBe(3);
     expect(redeem[5]).toBe("finn:preview:drivers");
     expect(REDEEM_SCRIPT).toContain("SADD");
     await store.revokeDriver(b.driverId);
@@ -169,7 +169,6 @@ describe("real @upstash/redis SDK against a fake REST endpoint (no network)", ()
   });
 
   it("listDrivers fails closed on a malformed SMEMBERS reply and on SDK errors", async () => {
-    fakeUpstash({ evalResult: undefined });
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ result: "oops" }), { status: 200 })));
     await expect(real().listDrivers()).rejects.toBeInstanceOf(DriverStoreUnavailableError);
     fakeUpstash({ failWith: { status: 500, error: "boom" } });

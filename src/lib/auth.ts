@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { authenticateSession, getDriverStore, getSessionSecret, type DriverStore } from "@/lib/driver";
 
 /**
@@ -52,9 +52,10 @@ function legacyMatches(token: string): boolean {
   if (process.env.FINN_LEGACY_TOKEN_ENABLED !== "1") return false;
   const expected = process.env.FINN_API_TOKEN?.trim();
   if (!expected) return false;
-  const given = Buffer.from(token);
-  const wanted = Buffer.from(expected);
-  return given.length === wanted.length && timingSafeEqual(given, wanted);
+  // Compare fixed-size digests so neither content nor length of FINN_API_TOKEN leaks through timing.
+  const given = createHash("sha256").update(token).digest();
+  const wanted = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(given, wanted);
 }
 
 /**

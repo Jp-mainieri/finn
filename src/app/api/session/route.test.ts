@@ -162,6 +162,39 @@ describe("/api/session", () => {
     expect(calls()).toBe(0);
   });
 
+  it("wrong or missing Content-Type is 415 and a body over 2 KB is 413, with zero Redis calls", async () => {
+    const { route, calls } = await boot();
+    const body = JSON.stringify({ inviteCode: "FINN-ABCD-EFGH" });
+    for (const ct of ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data", "application/jsonx", ""]) {
+      const headers: Record<string, string> = { ...IP };
+      if (ct) headers["content-type"] = ct;
+      const r = await route.POST(new Request("http://x/api/session", { method: "POST", headers, body }));
+      expect(r.status).toBe(415);
+      expect(await r.text()).not.toContain("FINN-");
+    }
+    // charset parameter and case are fine
+    const okType = await route.POST(new Request("http://x/api/session", { method: "POST", headers: { ...IP, "content-type": "Application/JSON; charset=utf-8" }, body }));
+    expect(okType.status).toBe(401);
+    const before = calls();
+
+    const big = JSON.stringify({ inviteCode: "FINN-ABCD-EFGH", pad: "x".repeat(3000) });
+    const byLength = await route.POST(post(big));
+    expect(byLength.status).toBe(413);
+    // no (or lying) Content-Length: the limited reader still stops it
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        const enc = new TextEncoder();
+        for (let i = 0; i < 10; i++) c.enqueue(enc.encode("x".repeat(500)));
+        c.close();
+      },
+    });
+    const streamed = await route.POST(
+      new Request("http://x/api/session", { method: "POST", headers: { ...IP, "content-type": "application/json" }, body: stream, duplex: "half" } as RequestInit),
+    );
+    expect(streamed.status).toBe(413);
+    expect(calls()).toBe(before); // only the earlier valid-type request touched Redis
+  });
+
   it("Redis down: short 503, nothing leaked or logged", async () => {
     const { route, store, drv } = await boot();
     const { code } = await store.createInvite({ label: "L", maxUses: 1, expiresAt: future() });

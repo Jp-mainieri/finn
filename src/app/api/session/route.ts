@@ -24,10 +24,44 @@ const tooMany = () =>
     { status: 429, headers: { ...NO_STORE, "Retry-After": String(REDEEM_RATE_LIMIT.windowSeconds) } },
   );
 
+export const MAX_BODY_BYTES = 2048;
+
+const unsupportedType = () =>
+  Response.json({ error: "Pedido inválido." }, { status: 415, headers: NO_STORE });
+const tooLarge = () => Response.json({ error: "Pedido grande demais." }, { status: 413, headers: NO_STORE });
+
+/** Reads at most MAX_BODY_BYTES; null when the body is larger. */
+async function readLimited(request: Request): Promise<string | null> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
 export async function POST(request: Request) {
+  // Rejected before any Redis command. application/json also forces a CORS preflight on
+  // cross-site browsers (text/plain "simple" requests are refused here).
+  const mediaType = (request.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+  if (mediaType !== "application/json") return unsupportedType();
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return tooLarge();
+
   let inviteCode: unknown;
   try {
-    const body: unknown = await request.json();
+    const text = await readLimited(request);
+    if (text === null) return tooLarge();
+    const body: unknown = JSON.parse(text);
     if (typeof body !== "object" || body === null || Array.isArray(body)) return badRequest();
     inviteCode = (body as Record<string, unknown>).inviteCode;
   } catch {

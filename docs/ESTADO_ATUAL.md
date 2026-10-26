@@ -27,6 +27,9 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 - 2026-10-26: após o security-review da entrega 1, o dono aprovou duas adições ao contrato: pepper HMAC (`FINN_INVITE_PEPPER`) no hash do convite e `rotateSessions` (incrementa `tokenVersion` sem banir o motorista). Motivo: baratas agora, caras depois de haver convites emitidos.
 - 2026-10-26: decisões técnicas do agente aceitas (provisórias, ajustáveis por parâmetro): rate limit do resgate 10 por 600 s por IP; IP ausente ou inválido cai num balde próprio de 3 por 600 s; teto de espera do Redis 2 s sem retry (o EVAL de resgate nunca é retentado); tempo em ms em `expiresAt`, em s em `iat`/`exp`.
 
+- **REGRA DE PROCESSO (security-review da entrega 2, C1 crítico, 2026-10-26): NENHUM convite pode ser emitido em produção antes das entregas 3 e 4.** Hoje o orquestrador autentica o convidado mas não usa o `driverId`: Spotify cai no `SPOTIFY_REFRESH_TOKEN` do dono e o Waze lê e grava o livro de endereços global (casa do dono). Quem resgatar convite controlaria o Spotify do dono. A entrega 3 deve começar pela trava (sem `driverId` do dono, desligar o Spotify do servidor e o livro global). O smoke `smoke:session` só roda a etapa do orquestrador com opt-in explícito.
+- 2026-10-26: flag `FINN_LEGACY_TOKEN_ENABLED` removida de Preview e Development (segurança, superfície do token legado); fica só em Production até o PWA novo (entrega 5). O token legado não expira e o `driverId` dele não tem registro no store.
+
 ## Decisões provisórias
 
 - **Redis único (D1, 2026-10-26):** o dono escolheu primeiro separar o banco de produção (opção b), mas o plano Free do Upstash permite **1 banco por conta** e um segundo exigiria Pay as You Go. O dono não quer gastar nada por enquanto, então ficou **um banco para os 3 ambientes**, separados só pelo prefixo `finn:<env>:`.
@@ -56,6 +59,10 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 9. `@upstash/redis` fixado em 1.40.0 sem `npm audit` nem checagem de procedência. Fazer antes do beta.
 10. Rotas devem tratar `DriverStoreUnavailableError` como negação com erro falável e sem logar o erro (entrega 2).
 11. Limite global de resgate de convite não existe (só por IP); tokens de 90 dias sem vínculo de ambiente (B3, em fila).
+13. `/api/agents/*` (A2A) aceita `FINN_API_TOKEN` independente da flag legada e roda os agentes com o Spotify e os endereços do dono (security-review A2). Decisão do dono pendente.
+14. Todo POST em `/api/session` gasta ao menos 1 comando Redis mesmo após rate limit e não há limite global: risco de esgotar a cota do plano Free sem autenticação (A3). Falta regra de rate limit no firewall da Vercel e alerta de uso no Upstash (ação do dono).
+15. Resgate de convite não é idempotente com resposta perdida (qa N4, security B4): retry cria motorista órfão ou 401. Decisão de produto pendente.
+16. Sem limite por motorista nas rotas que chamam IA (M3). `src/lib/spotify/auth.ts:129` faz `console.warn(..., err)` (pré-existente): conferir se `err` pode conter dado sensível.
 12. Singleton do `MemoryDriverStore` em dev com bundles separados do Next (hipótese do qa), e build do cliente se o PWA importar o barrel `src/lib/driver` (importa `node:crypto`): não importar do PWA.
 
 ## Pré-lançamento (antes de abrir a usuários reais)

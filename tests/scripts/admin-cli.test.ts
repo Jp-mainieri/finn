@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryDriverStore, keyPrefix } from "@/lib/driver";
 import { run, DEFAULT_DAYS } from "../../scripts/lib/admin-cli.mjs";
 
@@ -8,13 +11,14 @@ const URL_SECRET = "https://very-secret-host.upstash.example";
 const TOKEN_SECRET = "AXsecretRedisTokenValue";
 const T0 = 1_800_000_000_000;
 
-function harness(opts: { confirm?: boolean } = {}) {
+function harness(opts: { confirm?: boolean; tty?: boolean; secret?: string } = {}) {
   const out: string[] = [];
   const err: string[] = [];
   const created: string[] = [];
   const clock = { t: T0 };
   const store = new MemoryDriverStore(keyPrefix("test"), () => clock.t, PEPPER);
   const confirm = vi.fn(async () => opts.confirm ?? true);
+  const readSecret = vi.fn(async () => opts.secret ?? "");
   const env = {
     FINN_INVITE_PEPPER: PEPPER,
     FINN_SESSION_SECRET: SECRET,
@@ -28,10 +32,12 @@ function harness(opts: { confirm?: boolean } = {}) {
       err: (s: string) => err.push(s),
       createStore: (e: string) => (created.push(e), store),
       confirm,
+      readSecret,
+      isTTY: opts.tty ?? true,
       now: () => clock.t,
     }) as Promise<number>;
   const all = () => [...out, ...err].join("\n");
-  return { go, out, err, created, store, confirm, all, clock };
+  return { go, out, err, created, store, confirm, readSecret, all, clock };
 }
 
 describe("owner CLI", () => {
@@ -172,11 +178,109 @@ describe("owner CLI", () => {
     expect(err.join("\n")).toMatch(/Credenciais do Redis ausentes/);
   });
 
-  it("invite:revoke makes the invite unredeemable", async () => {
+  it("invite:revoke makes the invite unredeemable (code via argv still works)", async () => {
     const h = harness();
     await h.go(["invite:create", "--env", "preview", "--label", "A"]);
     const code = h.out[0];
     expect(await h.go(["invite:revoke", code, "--env", "preview"])).toBe(0);
     expect(await h.store.redeemInvite(code)).toBeNull();
+  });
+
+  it("invite:revoke without an argument asks for the code without echo (readSecret), never echoing it", async () => {
+    const h = harness();
+    await h.go(["invite:create", "--env", "preview", "--label", "A"]);
+    const code = h.out[0];
+    const h2 = harness({ secret: code });
+    // same store so the invite exists
+    const out: string[] = [];
+    const err: string[] = [];
+    const rc = await run(["invite:revoke", "--env", "preview"], {
+      env: {}, out: (s: string) => out.push(s), err: (s: string) => err.push(s),
+      createStore: () => h.store, readSecret: h2.readSecret, isTTY: true,
+    });
+    expect(rc).toBe(0);
+    expect(h2.readSecret).toHaveBeenCalledTimes(1);
+    expect([...out, ...err].join("\n")).not.toContain(code);
+    expect(await h.store.redeemInvite(code)).toBeNull();
+  });
+
+  it("invite:revoke reports 'not found' with exit 1 for an unknown, malformed or empty code", async () => {
+    const h = harness();
+    expect(await h.go(["invite:revoke", "FINN-ABCD-EFGH", "--env", "preview"])).toBe(1);
+    expect(h.err.join("\n")).toMatch(/Convite não encontrado \(confira o código e o --env\/pepper\)/);
+    expect(await h.go(["invite:revoke", "nope", "--env", "preview"])).toBe(1);
+    const e = harness({ secret: "" });
+    expect(await e.go(["invite:revoke", "--env", "preview"])).toBe(2);
+  });
+
+  it("without a TTY, driver:revoke/rotate require --yes and change nothing (no prompt, no hang)", async () => {
+    const h = harness({ tty: false });
+    const d = await h.store.createDriver({ label: "Ana" });
+    for (const cmd of ["driver:revoke", "driver:rotate"]) {
+      expect(await h.go([cmd, d.driverId, "--env", "preview"])).toBe(1);
+      expect(h.err.join("\n")).toMatch(/--yes/);
+    }
+    expect(h.confirm).not.toHaveBeenCalled();
+    expect((await h.store.getDriver(d.driverId))!.status).toBe("active");
+    expect(await h.go(["driver:rotate", d.driverId, "--env", "preview", "--yes"])).toBe(0);
+    expect((await h.store.getDriver(d.driverId))!.tokenVersion).toBe(2);
+  });
+
+  it("driver:list warns how many index entries were skipped", async () => {
+    const h = harness();
+    const fake = {
+      listDriversDetailed: async () => ({ drivers: [], skipped: 3 }),
+    };
+    const err: string[] = [];
+    const out: string[] = [];
+    expect(await run(["driver:list", "--env", "preview"], { env: {}, out: (s: string) => out.push(s), err: (s: string) => err.push(s), createStore: () => fake })).toBe(0);
+    expect(err.join("\n")).toMatch(/3 entrada/);
+    expect(out).toEqual(["Nenhum motorista."]);
+    void h;
+  });
+
+  it("a missing or invalid pepper says so, not 'Redis indisponível'", async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const bad = { createInvite: async () => { throw new Error("Missing required environment variable: FINN_INVITE_PEPPER"); } };
+    expect(await run(["invite:create", "--env", "preview", "--label", "A"], { env: {}, out: (s: string) => out.push(s), err: (s: string) => err.push(s), createStore: () => bad })).toBe(1);
+    expect(err.join("\n")).toMatch(/Pepper ausente ou inválido para este ambiente/);
+    expect(err.join("\n")).not.toMatch(/Redis indisponível/);
+  });
+
+  describe("--env-file", () => {
+    const dirs: string[] = [];
+    afterEach(() => {
+      for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+      delete process.env.FINN_TEST_FROM_FILE;
+    });
+
+    it("loads variables from the given file (created by this test), without printing them", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "finn-envfile-"));
+      dirs.push(dir);
+      const file = join(dir, "env");
+      writeFileSync(file, "FINN_TEST_FROM_FILE=value-from-file-123\n");
+      const out: string[] = [];
+      const err: string[] = [];
+      let seen: string | undefined;
+      const rc = await run(["driver:list", "--env", "preview", "--env-file", file], {
+        out: (s: string) => out.push(s),
+        err: (s: string) => err.push(s),
+        createStore: () => {
+          seen = process.env.FINN_TEST_FROM_FILE;
+          return { listDriversDetailed: async () => ({ drivers: [], skipped: 0 }) };
+        },
+      });
+      expect(rc).toBe(0);
+      expect(seen).toBe("value-from-file-123");
+      expect([...out, ...err].join("\n")).not.toContain("value-from-file-123");
+    });
+
+    it("refuses a nonexistent path before touching the store", async () => {
+      const h = harness();
+      expect(await h.go(["driver:list", "--env", "preview", "--env-file", join(tmpdir(), "finn-does-not-exist-xyz")])).toBe(2);
+      expect(h.err.join("\n")).toMatch(/não existe/);
+      expect(h.created).toEqual([]);
+    });
   });
 });

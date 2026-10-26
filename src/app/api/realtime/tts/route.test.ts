@@ -13,6 +13,7 @@ describe("POST /api/realtime/tts", () => {
 
   beforeEach(() => {
     vi.stubEnv("FINN_API_TOKEN", "s3cret");
+    vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", "1");
     vi.stubEnv("OPENAI_API_KEY", "sk-tts-secret");
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(console, "error").mockImplementation(() => {});

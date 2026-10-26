@@ -1,4 +1,4 @@
-import { authorize } from "@/lib/auth";
+import { authorizeDriver } from "@/lib/auth";
 import { MissingEnvError, optionalEnv, requireEnv } from "@/lib/env";
 import { buildLiveSessionConfig, DEFAULT_LIVE_VOICE, type LiveSessionResponse } from "@/lib/voice/live-session-config";
 
@@ -17,8 +17,8 @@ const LIVE_SESSIONS_URL = "https://api.openai.com/v1/live/sessions";
 const MAX_SDP_BYTES = 64 * 1024;
 
 export async function POST(request: Request) {
-  const denied = authorize(request);
-  if (denied) return denied;
+  const auth = await authorizeDriver(request);
+  if (auth instanceof Response) return auth;
 
   if (optionalEnv("ENABLE_GPT_LIVE", "0") !== "1") {
     return Response.json(

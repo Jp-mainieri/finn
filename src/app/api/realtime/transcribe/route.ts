@@ -1,4 +1,4 @@
-import { authorize } from "@/lib/auth";
+import { authorizeDriver } from "@/lib/auth";
 import { optionalEnv } from "@/lib/env";
 
 const GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
@@ -7,8 +7,8 @@ const STT_PROMPT = "Finn, Spotify, Waze, toca a playlist, pausa, próxima, me le
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // 10 MB limit for voice commands
 
 export async function POST(request: Request) {
-  const denied = authorize(request);
-  if (denied) return denied;
+  const auth = await authorizeDriver(request);
+  if (auth instanceof Response) return auth;
 
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   if (contentLength > MAX_AUDIO_BYTES * 1.5) {

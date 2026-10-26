@@ -25,6 +25,7 @@ export const SPOTIFY_CREDS: FakeSpotifyCredentials = {
 
 export function stubBaseEnv(extra: Record<string, string | undefined> = {}): void {
   vi.stubEnv("FINN_API_TOKEN", TEST_TOKEN);
+  vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", "1"); // /api/orchestrator uses authorizeDriver; the shared token is legacy
   vi.stubEnv("FINN_USE_MOCKS", "1");
   vi.stubEnv("SPOTIFY_CLIENT_ID", SPOTIFY_CREDS.clientId);
   vi.stubEnv("SPOTIFY_CLIENT_SECRET", SPOTIFY_CREDS.clientSecret);

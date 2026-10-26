@@ -13,6 +13,7 @@ describe("POST /api/realtime/session", () => {
 
   beforeEach(() => {
     vi.stubEnv("FINN_API_TOKEN", "s3cret");
+    vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", "1");
     vi.stubEnv("OPENAI_API_KEY", "sk-server-only");
     vi.stubEnv("ENABLE_GPT_LIVE", "1");
     vi.stubGlobal("fetch", fetchMock);

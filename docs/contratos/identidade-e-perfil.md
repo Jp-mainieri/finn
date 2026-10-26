@@ -16,7 +16,7 @@ Status: **aprovado pelo dono em 2026-10-26** (com convites por script local). De
 - **Prefixo de chaves**: `finn:<env>:` com `env = VERCEL_ENV ?? "development"`. Dev, preview e produção compartilham o mesmo Redis, então o prefixo é obrigatório.
 - **Chaves**
   - `driver:<driverId>` → `{ driverId, label, status: "active"|"revoked", tokenVersion, createdAt, spotifyUserId? }`
-  - `invite:<sha256(codigo)>` → `{ label, maxUses, uses, expiresAt, createdAt, revoked }` (o código em claro nunca é guardado)
+  - `invite:<hmac-sha256(FINN_INVITE_PEPPER, codigo)>` → `{ label, maxUses, uses, expiresAt, createdAt, revoked }` (o código em claro nunca é guardado; o HMAC com segredo de servidor impede força bruta offline a partir de um dump do Redis)
   - `spotify-index:<spotifyUserId>` → `driverId` (reservado; usado na entrega 4)
   - `ratelimit:redeem:<ip>` → contador com TTL
 - **Convite**: `FINN-XXXX-XXXX`, alfabeto sem caracteres ambíguos, resgate **atômico** (não pode ultrapassar `maxUses` sob corrida).
@@ -30,6 +30,7 @@ interface DriverStore {
   createDriver(input: { label: string }): Promise<Driver>;
   getDriver(driverId: string): Promise<Driver | null>;
   revokeDriver(driverId: string): Promise<void>;
+  rotateSessions(driverId: string): Promise<void>; // incrementa tokenVersion: invalida todos os tokens antigos sem banir o motorista
   createInvite(input: { label: string; maxUses: number; expiresAt: number }): Promise<{ code: string }>;
   redeemInvite(code: string): Promise<Driver | null>; // atômico; null se inválido/esgotado/expirado/revogado
   revokeInvite(code: string): Promise<void>;
@@ -53,6 +54,7 @@ Implementações: `MemoryDriverStore` (fake, usado em todos os testes) e `Upstas
 |---|---|---|
 | `KV_REST_API_URL`, `KV_REST_API_TOKEN` | já provisionadas pela integração | entrega 1 |
 | `FINN_SESSION_SECRET` | 32 bytes hex (`openssl rand -hex 32`), distinto por ambiente | entrega 2 |
+| `FINN_INVITE_PEPPER` | 32 bytes hex, distinto por ambiente; **trocar invalida todos os convites emitidos** | entrega 1 (correção) |
 | `FINN_LEGACY_TOKEN_ENABLED` | `1` para ligar; ausente = desligado | entrega 2 |
 | `FINN_TOKEN_ENC_KEY` | 32 bytes hex, distinto por ambiente | entrega 4 |
 
@@ -74,3 +76,9 @@ Implementações: `MemoryDriverStore` (fake, usado em todos os testes) e `Upstas
 ## Fora de escopo
 
 Rate limit geral por motorista, métricas, OAuth do Spotify como login (opção C), memória da viagem, aliases de playlist.
+
+## Histórico de mudanças
+
+- 2026-10-26: aprovado com convites por script local (opção A).
+- 2026-10-26: adições aprovadas pelo dono após security-review da entrega 1: pepper HMAC no hash do convite e `rotateSessions` (baratas agora, caras depois que houver convites emitidos).
+- Em fila para decisão do dono: credencial do Redis separada para produção (M2); vínculo de ambiente no payload do token (B3).

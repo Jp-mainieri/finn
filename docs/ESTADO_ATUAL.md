@@ -20,7 +20,8 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 ## Decisões provisórias
 
 - **Identidade (opção B, 2026-10-26):** `driverId` opaco gerado pelo servidor; token de sessão assinado, emitido em troca de código de convite criado e revogável pelo dono. O Spotify ID é só atributo ligado ao perfil (índice `spotify:<id> → driverId`). Substitui o `FINN_API_TOKEN` compartilhado.
-  - Reabre se: for preciso login sem convite (migrar para OAuth Spotify, opção C, só troca a forma de emitir o token), ou o OAuth quebrar no iOS standalone PWA.
+  - Convites criados e revogados por script local rodado pelo dono (sem rota de admin). Contrato aprovado em 2026-10-26: [`contratos/identidade-e-perfil.md`](./contratos/identidade-e-perfil.md).
+  - Reabre se: for preciso convidar pelo celular com frequência (rota de admin), for preciso login sem convite (migrar para OAuth Spotify, opção C, só troca a forma de emitir o token), ou o OAuth quebrar no iOS standalone PWA.
 
 ## Casos cinzentos aceitos
 

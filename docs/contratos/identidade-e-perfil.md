@@ -1,6 +1,6 @@
 # Contrato — identidade do motorista, sessão e `DriverStore` (etapa 1)
 
-Status: **proposta, aguardando OK do dono**. Decisão de base: identidade opção B (provisória), ver `ESTADO_ATUAL.md`.
+Status: **aprovado pelo dono em 2026-10-26** (com convites por script local). Decisão de base: identidade opção B (provisória), ver `ESTADO_ATUAL.md`.
 
 ## Invariantes
 
@@ -45,7 +45,7 @@ Implementações: `MemoryDriverStore` (fake, usado em todos os testes) e `Upstas
 - `GET /api/session` → valida o token e devolve `{ driverId, label }`.
 - `authorizeDriver(request)` (novo, em `src/lib/auth.ts`) devolve `{ driverId }` ou `Response` de erro. Passa a proteger `/api/orchestrator` e `/api/realtime/*`.
 - **Token legado `FINN_API_TOKEN`**: continua aceito **só** se `FINN_LEGACY_TOKEN_ENABLED=1` (transitório, para não quebrar o uso atual no carro até o PWA novo). Mapeia para um `driverId` fixo de dono. Valor ausente ou diferente de `1` = desligado. `/api/agents/*` (A2A externo) continua com `authorize()` atual, fora desta etapa.
-- Criação e revogação de convites: ver decisão pendente (script local ou rota de admin).
+- Criação e revogação de convites (decisão do dono, 2026-10-26: opção A): **script local** `npm run invite:create|invite:revoke|driver:revoke`, rodado pelo dono no próprio terminal com as credenciais do Redis. Nenhuma rota de admin no servidor. Reabre se o dono precisar convidar pelo celular com frequência (rota de admin com `FINN_ADMIN_TOKEN`, sujeita a security-review).
 
 ## Variáveis (só nomes e formato; valores são do dono)
 

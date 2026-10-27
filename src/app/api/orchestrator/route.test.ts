@@ -52,7 +52,8 @@ describe("POST /api/orchestrator driver identity", () => {
     expect(h.seen.length).toBeGreaterThan(0);
     for (const input of h.seen) {
       expect(input.driverId).toBe(h.driverId);
-      expect(input.driverContext).toEqual({ spotifyRefreshToken: "mine" });
+      expect(input.driverContext).toEqual({}); // the token inside is dropped
+      expect(JSON.stringify(input)).not.toContain("mine");
     }
   });
 
@@ -62,8 +63,35 @@ describe("POST /api/orchestrator driver identity", () => {
       { cookie: "driverId=drv_legacy_owner_000000000; finn_spotify_rt=cookie-rt" },
     );
     expect(h.seen[0].driverId).toBe(h.driverId);
-    expect(h.seen[0].driverContext).toEqual({ spotifyRefreshToken: "cookie-rt" });
+    expect(h.seen[0].driverContext).toEqual({});
     expect(JSON.stringify(h.seen[0])).not.toContain("Rua X");
+  });
+
+  it("a Spotify token in the body, driverContext or any finn_spotify_* cookie never reaches the agents (owner and guest)", async () => {
+    for (const driverId of ["drv_legacy_owner_000000000", "drv_" + "B".repeat(22)]) {
+      h.driverId = driverId;
+      h.seen.length = 0;
+      await post(
+        {
+          transcript: "toca rock",
+          spotifyRefreshToken: "tok-body",
+          refreshToken: "tok-body2",
+          driverContext: { spotifyRefreshToken: "tok-ctx" },
+        },
+        { cookie: "finn_spotify_rt=tok-cookie1; finn_spotify_token=tok-cookie2; finn_spotify_mode=tok-cookie3" },
+      );
+      expect(h.seen.length).toBeGreaterThan(0);
+      for (const input of h.seen) {
+        expect(input.driverId).toBe(driverId);
+        expect(JSON.stringify(input)).not.toMatch(/tok-/);
+      }
+    }
+    h.driverId = "drv_" + "B".repeat(22);
+  });
+
+  it("without a driverContext in the request none is made up", async () => {
+    await post({ transcript: "toca rock" }, { cookie: "finn_spotify_rt=cookie-rt" });
+    expect(h.seen[0].driverContext).toBeUndefined();
   });
 
   it("a continuation over 2 KB is ignored; one within the limit is passed on (the agent parses it strictly)", async () => {
@@ -86,12 +114,9 @@ describe("POST /api/orchestrator driver identity", () => {
     },
   );
 
-  it("a malformed %-escape in the Spotify cookie is treated as absent, not an exception", async () => {
-    const res = await post({ transcript: "toca rock" }, { cookie: "finn_spotify_rt=%E0%A4%A" });
+  it("a malformed %-escape in a cookie is never read, so never an exception", async () => {
+    const res = await post({ transcript: "toca rock" }, { cookie: "finn_spotify_rt=%E0%A4%A; finn_spotify_token=bad%zz" });
     expect(res.status).toBe(200);
     expect(h.seen[0].driverContext).toBeUndefined();
-    const ok = await post({ transcript: "toca rock" }, { cookie: "finn_spotify_rt=bad%zz; finn_spotify_token=fine%20tok" });
-    expect(ok.status).toBe(200);
-    expect(h.seen.at(-1)?.driverContext).toEqual({ spotifyRefreshToken: "fine tok" });
   });
 });

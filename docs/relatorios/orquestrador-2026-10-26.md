@@ -71,3 +71,12 @@ Gerar `FINN_SESSION_SECRET` e `FINN_INVITE_PEPPER` por ambiente; autorizar push 
 - `vercel env ls` exibiu um prefixo truncado (cerca de 18 caracteres do cabeçalho codificado, igual em todos) dos valores das variáveis `KV_*` do tipo Config. Não é segredo útil, mas foi exibição de valor parcial; passo a usar só filtro por nome.
 - O commit `31db3ae` do agente `api` (rodada 3) incluiu este arquivo, que era do orquestrador e ainda não estava commitado. Fora do escopo dele e não relatado (ele declarou "nenhum desvio"). Sem dano; o histórico não foi reescrito. Daqui em diante, os documentos do orquestrador são commitados antes de acionar o agente, ou em branch separada.
 - Nenhuma migration, nenhuma ação em produção, nenhum merge.
+
+## Atualização 2026-10-27
+
+12. PR #4 (A2A com segredo próprio) aberto, empilhado sobre o #3. Dono autorizou o push. Sem merge.
+13. Contrato da entrega 3 escrito e aprovado pelo dono (3 decisões embutidas: A2A só do dono; endereços do aparelho ignorados; texto puro no Redis). Entrega 3 delegada ao `api`: 630 testes, verificado por mim.
+14. qa (1 bloqueante de cobertura B1, 12 não bloqueantes; 31 mutações) e security-review (0 crítico, 0 alto, 2 médios, 6 baixos). Registrei as duas revisões em `docs/revisoes/` e commitei antes de devolver ao agente (evita repetir o desvio do `31db3ae`). O qa não pôde gravar `.md`; o relatório dele foi registrado por mim como resumo.
+15. Rodada 2 (um commit, `b44f056`): B1 e os itens baratos corrigidos; atomicidade do limitador, cookie do Spotify de convidado (vai para a entrega 4) e demais itens ficaram como débito. Verificado por mim: `npm test` 700 passaram, 4 ignorados, 0 falharam (44 arquivos); typecheck, lint e build limpos; escopo sem arquivos do PWA nem docs do orquestrador; nenhum log novo com valor; sem push.
+16. Desvio do agente: moveu o teste do qa para `tests/acceptance/driver-isolation.test.ts` em vez de manter `tests/qa`. Aceito.
+17. Não verificado: nada contra Upstash, Vercel ou Spotify reais; só a mutação do B1 foi executada de fato nas correções da rodada 2 (as demais por raciocínio); `isWellFormed` exige Node 20+.

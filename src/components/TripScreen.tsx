@@ -53,14 +53,6 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
           >
             Configurações
           </button>
-          <button
-            onClick={() => {
-              if (window.confirm("Apagar o token salvo neste aparelho?")) controller.resetToken();
-            }}
-            className="min-h-12 rounded-full border border-border px-4 text-base text-muted"
-          >
-            Token
-          </button>
         </div>
       </header>
 
@@ -151,7 +143,7 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
         </button>
       )}
 
-      <DriverSettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <DriverSettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} controller={controller} view={view} />
     </div>
   );
 }

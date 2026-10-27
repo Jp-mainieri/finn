@@ -3,7 +3,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { TokenStore } from "@/lib/voice/token-store";
 import { VoiceController, type VoiceView } from "@/lib/voice/voice-controller";
-import { TokenSetup } from "./TokenSetup";
+import { InviteSetup } from "./InviteSetup";
 import { TripScreen } from "./TripScreen";
 
 // One controller per page load (it owns the mic and the audio context).
@@ -34,7 +34,11 @@ export function FinnApp() {
       {!view ? (
         <div className="flex flex-1 items-center justify-center text-5xl font-bold">Finn</div>
       ) : view.needsToken ? (
-        <TokenSetup rejected={view.tokenRejected} onSave={(token) => getController().saveToken(token)} />
+        <InviteSetup
+          rejected={view.tokenRejected}
+          onRedeem={(code) => getController().redeemInvite(code)}
+          onCancel={view.canCancelInvite ? () => getController().cancelInvite() : undefined}
+        />
       ) : (
         <TripScreen view={view} controller={getController()} />
       )}

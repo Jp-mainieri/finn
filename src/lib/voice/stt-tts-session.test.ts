@@ -220,4 +220,36 @@ describe("SttTtsVoiceSession session lifecycle & VAD", () => {
       expect.objectContaining({ delta: "Navegando para casa." }),
     );
   });
+
+  it.each([
+    [429, "Muitas tentativas, tente de novo em instantes.", "Rate limited"],
+    [503, "O Finn está fora do ar agora, tente de novo daqui a pouco.", "Unavailable"],
+  ] as const)("a %i from transcribe is spoken locally and never calls the TTS route", async (status, line, errorMsg) => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(Response.json({ error: "x" }, { status }));
+    const session = new SttTtsVoiceSession({
+      audio: mockAudio as unknown as AudioIO,
+      getToken: () => "s3cret",
+      handlers,
+      fetchImpl: fetchMock,
+    });
+    await session.connect();
+    const speechFrame = new Int16Array(512).fill(2000);
+    for (let i = 0; i < 12; i++) {
+      vi.advanceTimersByTime(32);
+      session.processFrame(speechFrame);
+    }
+    const silenceFrame = new Int16Array(512);
+    for (let i = 0; i < 30; i++) {
+      vi.advanceTimersByTime(32);
+      session.processFrame(silenceFrame);
+    }
+    await vi.runAllTimersAsync();
+
+    expect(handlers.onAssistantTranscript).toHaveBeenCalledWith(expect.objectContaining({ delta: line }));
+    expect(handlers.onError).toHaveBeenCalledWith(errorMsg);
+    expect(handlers.onDelegation).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1); // transcribe only; the local line did not use /api/realtime/tts
+    vi.useRealTimers();
+  });
 });

@@ -50,9 +50,6 @@ export function expectAgentResult(value: unknown, agent?: AgentId): asserts valu
   for (const a of r.clientActions) {
     if (a.type === "open_url") {
       expect(a.url).toBeTypeOf("string");
-    } else if (a.type === "save_address") {
-      expect(a.address).toBeTypeOf("string");
-      expect(["casa", "trabalho"]).toContain(a.label);
     }
   }
   expect(Array.isArray(r.toolCalls)).toBe(true);

@@ -1,7 +1,7 @@
 import { CLOSE_TIMEOUT_MS, CONNECT_TIMEOUT_MS, LIVE_SESSION_PATH, MAX_SPOKEN_CHARS } from "./config";
 import type { LiveSessionResponse } from "./live-session-config";
 import { commentaryAppend, type LiveClientEvent, parseLiveServerEvent, sessionClose } from "./live-events";
-import { UnauthorizedError, type VoiceSession, type VoiceSessionHandlers } from "./voice-session";
+import { RateLimitedError, UnauthorizedError, UnavailableError, type VoiceSession, type VoiceSessionHandlers } from "./voice-session";
 
 /**
  * GPT-Live over WebRTC with client delegation.
@@ -115,6 +115,8 @@ export class GptLiveSession implements VoiceSession {
       body: JSON.stringify({ sdp }),
     });
     if (res.status === 401) throw new UnauthorizedError();
+    if (res.status === 429) throw new RateLimitedError();
+    if (res.status === 503) throw new UnavailableError();
     if (!res.ok) throw new Error(`Live session request failed (${res.status})`);
     const answer = (await res.json()) as LiveSessionResponse;
     await this.pc.setRemoteDescription({ type: "answer", sdp: answer.sdp });

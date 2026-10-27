@@ -1,4 +1,5 @@
 import type { OrchestratorResponse } from "@/lib/contracts/client-events";
+import { LOCAL_SPEECH } from "./failure-speech";
 import { DELEGATION_SETTLE_MS, DELEGATION_TRANSCRIPT_WAIT_MS } from "./config";
 import type { OrchestratorClient, OrchestratorFailure } from "./orchestrator-client";
 import type { TranscriptBuffer } from "./transcript-buffer";
@@ -8,7 +9,9 @@ import type { Delegation } from "./voice-session";
 export const SPEECH = {
   notUnderstood: "Não entendi o pedido. Pode repetir?",
   unavailable: "Não consegui falar com o servidor agora. Tenta de novo daqui a pouco.",
-  unauthorized: "Meu acesso ao servidor foi recusado. Quando estiver parado, configure o token de novo na tela.",
+  unauthorized: "Meu acesso ao servidor foi recusado. Quando estiver parado, entre com um convite de novo na tela.",
+  rateLimited: LOCAL_SPEECH.rate_limited,
+  outOfService: LOCAL_SPEECH.unavailable,
 } as const;
 
 export interface DelegationHandlerDeps {
@@ -16,6 +19,8 @@ export interface DelegationHandlerDeps {
   orchestrator: OrchestratorClient;
   /** Hands text to the voice layer to be spoken for this delegation. */
   speak: (delegationId: string, text: string) => void;
+  /** Phone's own TTS, no network: used for 429/503 (the server is the problem). Falls back to `speak`. */
+  speakLocal?: (text: string) => void;
   onWorkStarted?: () => void;
   onWorkFinished?: () => void;
   onTurn?: (turn: { transcript: string; response: OrchestratorResponse }) => void;
@@ -56,7 +61,13 @@ export class DelegationHandler {
     }
 
     console.warn("[voice] orchestrator failed", result.failure, result.status);
-    this.deps.speak(id, result.failure === "unauthorized" ? SPEECH.unauthorized : SPEECH.unavailable);
+    if (result.failure === "rate_limited" || result.failure === "unavailable") {
+      const text = result.failure === "rate_limited" ? SPEECH.rateLimited : SPEECH.outOfService;
+      if (this.deps.speakLocal) this.deps.speakLocal(text);
+      else this.deps.speak(id, text);
+    } else {
+      this.deps.speak(id, result.failure === "unauthorized" ? SPEECH.unauthorized : SPEECH.unavailable);
+    }
     this.deps.onFailure?.(result.failure, transcript);
   }
 

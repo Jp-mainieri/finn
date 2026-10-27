@@ -17,24 +17,6 @@ export const AGENT_IDS: readonly AgentId[] = ["spotify", "waze"] as const;
 // In-process contract (what each agent implements)
 // ---------------------------------------------------------------------------
 
-/**
- * @deprecated Removed in 5b. The server ignores it completely (the orchestrator does not read it and
- * `AgentTaskInput` has no such field). Kept only so src/lib/voice and src/components still type-check.
- */
-export interface DriverContext {
-  /**
-   * @deprecated Never read by the server since delivery 4 (the refresh token lives encrypted in the
-   * server store, by driverId). Type kept ONLY so the PWA (src/lib/voice, removed in delivery 5) still
-   * type-checks; the route drops it. Do not use.
-   */
-  spotifyRefreshToken?: string;
-  /**
-   * @deprecated Ignored by the server since delivery 3 (addresses live in the server store, per driver).
-   * Kept only so older PWA builds still type-check.
-   */
-  savedAddresses?: Partial<Record<"casa" | "trabalho", string>>;
-}
-
 export interface AgentTaskInput {
   /** Full driver transcript for the turn. Agents ignore parts outside their domain. */
   transcript: string;

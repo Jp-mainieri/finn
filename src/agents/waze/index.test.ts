@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
 import type { Agent, AgentResult } from "@/lib/contracts/a2a";
 import type { NeuralakeClient } from "@/lib/contracts/neuralake";
 import { WAZE_TOOLS } from "@/lib/contracts/tools";
@@ -33,7 +34,7 @@ function useModel(script: MockScript): MockNeuralakeClient {
 }
 
 const handle = (transcript: string, continuation?: unknown) =>
-  wazeAgent.handle({ transcript, contextId: "ctx", continuation });
+  wazeAgent.handle({ transcript, contextId: "ctx", continuation, driverId: LEGACY_OWNER_DRIVER_ID });
 
 beforeEach(() => {
   vi.stubEnv("WAZE_SAVED_ADDRESSES", "");
@@ -106,7 +107,7 @@ describe("wazeAgent", () => {
       ],
     });
     expect(second.continuation).toBeUndefined();
-    expect(await getAddressBook().get("casa")).toBe("Rua Augusta, 123");
+    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID).get("casa")).toBe("Rua Augusta, 123");
 
     // Turn 3: next time, the saved address is used without asking.
     useModel(navigateScript("minha casa"));
@@ -185,7 +186,7 @@ describe("wazeAgent through the orchestrator", () => {
 
   it("round-trips the home-address continuation, even alongside music (UC7)", async () => {
     useModel(navigateScript("casa"));
-    const first = await orchestrate("toca minha playlist e me leva pra casa", { agents, contextId: "ctx" });
+    const first = await orchestrate("toca minha playlist e me leva pra casa", { agents, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
     expect(first.speech).toBe("Tocando sua playlist. Qual é o endereço da sua casa?");
     expect(first.clientActions).toEqual([]);
     expect(first.continuation).toEqual({ agent: "waze", state: { pendingLabel: "casa" } });
@@ -194,6 +195,7 @@ describe("wazeAgent through the orchestrator", () => {
     const second = await orchestrate("Rua Augusta, 123", {
       agents,
       contextId: "ctx",
+      driverId: LEGACY_OWNER_DRIVER_ID,
       continuation: first.continuation,
     });
     expect(second.results.map((r) => r.agent)).toEqual(["waze"]);
@@ -207,23 +209,37 @@ describe("wazeAgent through the orchestrator", () => {
     ]);
   });
 
-  it("prioritizes driverContext.savedAddresses for multi-user", async () => {
+  it("ignores driverContext.savedAddresses sent by the client", async () => {
     vi.stubEnv("WAZE_SAVED_ADDRESSES", JSON.stringify({ casa: "Env Casa" }));
     resetAddressBook();
     useModel(navigateScript("casa"));
     const res = await wazeAgent.handle({
       transcript: "me leva pra casa",
       contextId: "ctx",
+      driverId: LEGACY_OWNER_DRIVER_ID,
       driverContext: { savedAddresses: { casa: "Custom Driver Casa" } },
     });
     expect(res.status).toBe("completed");
     expect(res.clientActions).toEqual([
       {
         type: "open_url",
-        url: "https://waze.com/ul?q=Custom%20Driver%20Casa&navigate=yes",
+        url: "https://waze.com/ul?q=Env%20Casa&navigate=yes",
         label: "Navegar para casa",
       },
     ]);
+  });
+
+  it("a non-owner never reads the owner's seed nor writes into the owner's book", async () => {
+    vi.stubEnv("WAZE_SAVED_ADDRESSES", JSON.stringify({ casa: "Casa do Dono" }));
+    resetAddressBook();
+    const OTHER = "drv_" + "B".repeat(22);
+    useModel(navigateScript("casa"));
+    const asked = await wazeAgent.handle({ transcript: "me leva pra casa", contextId: "ctx", driverId: OTHER });
+    expect(asked).toMatchObject({ status: "input-required", continuation: { pendingLabel: "casa" }, clientActions: [] });
+
+    useModel(navigateScript("Rua do Outro, 9"));
+    await wazeAgent.handle({ transcript: "Rua do Outro, 9", contextId: "ctx", driverId: OTHER, continuation: asked.continuation });
+    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID).get("casa")).toBe("Casa do Dono");
   });
 
   it("emits save_address clientAction when driverContext is provided", async () => {
@@ -232,6 +248,7 @@ describe("wazeAgent through the orchestrator", () => {
       transcript: "Rua Oscar Freire, 100",
       contextId: "ctx",
       continuation: { pendingLabel: "casa" },
+      driverId: LEGACY_OWNER_DRIVER_ID,
       driverContext: {},
     });
     expect(res.status).toBe("completed");

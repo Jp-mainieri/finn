@@ -1,9 +1,15 @@
 import type { ToolExecutor } from "@/lib/agent-runtime";
 import type { AgentTaskInput } from "@/lib/contracts/a2a";
 import { spotifyRequest } from "@/lib/spotify/api";
+import type { SpotifyIdentity } from "@/lib/spotify/auth";
 import { findBestMatch } from "@/lib/spotify/fuzzy";
 import { controlPlayback, playContext, type PlaybackAction } from "@/lib/spotify/player";
 import { listPlaylists, playlistUri, type Playlist } from "@/lib/spotify/playlists";
+
+/** Identity for Spotify calls: driverId from the server only; the token is the driver's own (theirs until delivery 4). */
+function whoIs(input: AgentTaskInput): SpotifyIdentity {
+  return { driverId: input.driverId, refreshToken: input.driverContext?.spotifyRefreshToken };
+}
 
 const PLAYBACK_ACTIONS: readonly PlaybackAction[] = ["play", "pause", "skip"];
 
@@ -13,7 +19,7 @@ const playlistsByTurn = new WeakMap<AgentTaskInput, Promise<Playlist[]>>();
 function playlistsFor(input: AgentTaskInput): Promise<Playlist[]> {
   let pending = playlistsByTurn.get(input);
   if (!pending) {
-    pending = listPlaylists(input.signal, input.driverContext?.spotifyRefreshToken);
+    pending = listPlaylists(whoIs(input), input.signal);
     // Don't memoize failures: a retry within the turn should hit the API again.
     pending.catch(() => playlistsByTurn.delete(input));
     playlistsByTurn.set(input, pending);
@@ -40,7 +46,7 @@ export const spotifyExecutors: Record<string, ToolExecutor> = {
           );
         if (isGeneric && playlists.length > 0) {
           const p = playlists[0];
-          await playContext(playlistUri(p.id), input.signal, input.driverContext?.spotifyRefreshToken);
+          await playContext(playlistUri(p.id), whoIs(input), input.signal);
           return { result: { found: true, playlist: { id: p.id, name: p.name } } };
         }
 
@@ -51,7 +57,7 @@ export const spotifyExecutors: Record<string, ToolExecutor> = {
             artists?: { items?: Array<{ id?: string; name?: string; uri?: string } | null> };
           }>(
             `/search?q=${encodeURIComponent(requested)}&type=playlist,album,artist&limit=3`,
-            { signal: input.signal, refreshToken: input.driverContext?.spotifyRefreshToken },
+            { ...whoIs(input), signal: input.signal },
           );
 
           const foundItem =
@@ -60,7 +66,7 @@ export const spotifyExecutors: Record<string, ToolExecutor> = {
             searchRes?.artists?.items?.find((ar) => ar?.uri && ar?.name);
 
           if (foundItem?.uri && foundItem?.name) {
-            await playContext(foundItem.uri, input.signal, input.driverContext?.spotifyRefreshToken);
+            await playContext(foundItem.uri, whoIs(input), input.signal);
             return {
               result: {
                 found: true,
@@ -78,7 +84,7 @@ export const spotifyExecutors: Record<string, ToolExecutor> = {
       };
     }
     const { id, name } = match.item;
-    await playContext(playlistUri(id), input.signal, input.driverContext?.spotifyRefreshToken);
+    await playContext(playlistUri(id), whoIs(input), input.signal);
     return { result: { found: true, playlist: { id, name } } };
   },
 
@@ -87,7 +93,7 @@ export const spotifyExecutors: Record<string, ToolExecutor> = {
     if (!PLAYBACK_ACTIONS.includes(action)) {
       return { result: { ok: false, error: `action must be one of ${PLAYBACK_ACTIONS.join(", ")}` } };
     }
-    await controlPlayback(action, input.signal, input.driverContext?.spotifyRefreshToken);
+    await controlPlayback(action, whoIs(input), input.signal);
     return { result: { ok: true, action } };
   },
 };

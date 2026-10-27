@@ -15,6 +15,7 @@
  * as the function instance — a cold start (or another instance) forgets them
  * and falls back to the env seed. Put long-lived addresses in the env.
  */
+import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
 import { optionalEnv } from "@/lib/env";
 import { isSavedLabel, type SavedLabel } from "./labels";
 
@@ -39,38 +40,15 @@ export class InProcessAddressBook implements AddressBook {
   }
 }
 
-/**
- * Layers per-driver saved addresses (e.g. from mobile device) over a base address book.
- * Writes are written to both the driver-local store and the base book.
- */
-export class LayeredAddressBook implements AddressBook {
-  private readonly driverAddresses: Map<SavedLabel, string>;
-
-  constructor(
-    driverSeed: Partial<Record<SavedLabel, string>> = {},
-    private readonly baseBook: AddressBook = getAddressBook(),
-  ) {
-    this.driverAddresses = new Map(Object.entries(driverSeed) as [SavedLabel, string][]);
-  }
-
-  async get(label: SavedLabel): Promise<string | undefined> {
-    return this.driverAddresses.get(label) ?? this.baseBook.get(label);
-  }
-
-  async set(label: SavedLabel, address: string): Promise<void> {
-    this.driverAddresses.set(label, address);
-    await this.baseBook.set(label, address);
-  }
-}
-
 /** Parses `WAZE_SAVED_ADDRESSES`; invalid JSON or entries are logged and ignored. */
 export function parseSavedAddresses(raw: string): Partial<Record<SavedLabel, string>> {
   if (!raw.trim()) return {};
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch (err) {
-    console.warn("[waze] WAZE_SAVED_ADDRESSES is not valid JSON; ignoring it", err);
+  } catch {
+    // The parse error is deliberately not logged: its message can quote part of the address.
+    console.warn("[waze] WAZE_SAVED_ADDRESSES is not valid JSON; ignoring it");
     return {};
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -87,14 +65,20 @@ export function parseSavedAddresses(raw: string): Partial<Record<SavedLabel, str
   return seed;
 }
 
-let book: AddressBook | undefined;
+let ownerBook: AddressBook | undefined;
 
-export function getAddressBook(): AddressBook {
-  book ??= new InProcessAddressBook(parseSavedAddresses(optionalEnv("WAZE_SAVED_ADDRESSES", "")));
-  return book;
+/**
+ * Address book of ONE driver. Only the owner (LEGACY_OWNER_DRIVER_ID) gets the book seeded from
+ * WAZE_SAVED_ADDRESSES; anyone else gets an empty book of their own. No driver can reach another's.
+ * (Interim for delivery 3 step 1: per-driver persistence arrives in step 2.)
+ */
+export function getAddressBook(driverId: string): AddressBook {
+  if (driverId !== LEGACY_OWNER_DRIVER_ID) return new InProcessAddressBook();
+  ownerBook ??= new InProcessAddressBook(parseSavedAddresses(optionalEnv("WAZE_SAVED_ADDRESSES", "")));
+  return ownerBook;
 }
 
-/** Drops the cached book (and its in-process writes); the next get re-reads the env. For tests. */
+/** Drops the cached owner book (and its in-process writes); the next get re-reads the env. For tests. */
 export function resetAddressBook(): void {
-  book = undefined;
+  ownerBook = undefined;
 }

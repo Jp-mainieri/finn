@@ -1,3 +1,4 @@
+import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, CompletionRequest } from "@/lib/contracts/neuralake";
 import { SPOTIFY_TOOLS } from "@/lib/contracts/tools";
@@ -44,7 +45,7 @@ function install(opts: FakeSpotifyOptions = {}) {
   return fake;
 }
 
-const run = (transcript: string) => spotifyAgent.handle({ transcript, contextId: "ctx" });
+const run = (transcript: string) => spotifyAgent.handle({ transcript, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
 
 function lastToolResult(req: CompletionRequest): unknown {
   const last = req.messages.at(-1);

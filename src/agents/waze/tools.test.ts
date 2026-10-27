@@ -1,8 +1,9 @@
+import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
 import { describe, expect, it } from "vitest";
 import { InProcessAddressBook } from "@/lib/waze/address-book";
 import { createNavigateTo, parseContinuation } from "./tools";
 
-const input = { transcript: "", contextId: "ctx" };
+const input = { transcript: "", contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID };
 
 describe("parseContinuation", () => {
   it("accepts only known shapes", () => {

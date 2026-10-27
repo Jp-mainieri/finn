@@ -1,3 +1,4 @@
+import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
 import type {
   A2AMessage,
   A2AResponse,
@@ -63,7 +64,9 @@ export async function handleA2ARequest(agent: Agent, request: Request): Promise<
     .find((c) => c !== undefined);
 
   const contextId = message.contextId ?? crypto.randomUUID();
-  const result = await agent.handle({ transcript, contextId, continuation });
+  // FINN_A2A_TOKEN is the OWNER's credential: A2A always runs as the owner, explicitly. The id is
+  // fixed here and never read from the body.
+  const result = await agent.handle({ transcript, contextId, continuation, driverId: LEGACY_OWNER_DRIVER_ID });
 
   const reply: A2AMessage = {
     kind: "message",

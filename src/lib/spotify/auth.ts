@@ -1,4 +1,5 @@
 import { UserFacingError } from "@/lib/agent-runtime";
+import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
 import { MissingEnvError, requireEnv } from "@/lib/env";
 
 export const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
@@ -16,6 +17,7 @@ const EXPIRY_MARGIN_MS = 60_000;
 
 export const NOT_CONFIGURED_SPEECH = "O Spotify ainda não está configurado.";
 export const AUTH_FAILED_SPEECH = "Perdi o acesso ao seu Spotify.";
+export const CONNECT_SPOTIFY_SPEECH = "Conecte seu Spotify.";
 export const UNREACHABLE_SPEECH = "Não consegui falar com o Spotify agora.";
 
 interface CachedToken {
@@ -107,110 +109,95 @@ async function requestToken(
   return json;
 }
 
-async function refreshAccessToken(signal?: AbortSignal, fallbackToken?: string): Promise<string> {
-  const isTest = Boolean(process.env.VITEST);
+/** Who is asking. The server's own refresh token is reserved for the owner (LEGACY_OWNER_DRIVER_ID). */
+export interface SpotifyIdentity {
+  driverId: string;
+  /** The driver's own refresh token (driverContext or cookie, theirs until delivery 4). */
+  refreshToken?: string;
+}
+
+function accessFrom(json: TokenResponse): CachedToken {
+  return { accessToken: json.access_token, expiresAt: Date.now() + json.expires_in * 1000 - EXPIRY_MARGIN_MS };
+}
+
+/** Server token path. Reached ONLY for the owner; the only reader of the module-level caches. No fallback. */
+async function refreshAccessToken(signal?: AbortSignal): Promise<string> {
   const refreshToken = rotatedRefreshToken ?? spotifyEnv("SPOTIFY_REFRESH_TOKEN");
-  try {
-    const json = await requestToken(
-      { grant_type: "refresh_token", refresh_token: refreshToken },
-      signal,
-    );
-    if (json.refresh_token && json.refresh_token !== refreshToken) {
-      rotatedRefreshToken = json.refresh_token;
-      console.warn("[spotify] refresh token was rotated; update SPOTIFY_REFRESH_TOKEN if it stops working");
-    }
-    cachedToken = {
-      accessToken: json.access_token,
-      expiresAt: Date.now() + json.expires_in * 1000 - EXPIRY_MARGIN_MS,
-    };
-    return json.access_token;
-  } catch (err) {
-    if (!isTest && fallbackToken && fallbackToken !== refreshToken && !signal?.aborted) {
-      console.warn("[spotify] server SPOTIFY_REFRESH_TOKEN failed; falling back to custom refreshToken", err);
-      const json = await requestToken(
-        { grant_type: "refresh_token", refresh_token: fallbackToken },
-        signal,
-      );
-      cachedToken = {
-        accessToken: json.access_token,
-        expiresAt: Date.now() + json.expires_in * 1000 - EXPIRY_MARGIN_MS,
-      };
-      return json.access_token;
-    }
-    throw err;
+  const json = await requestToken({ grant_type: "refresh_token", refresh_token: refreshToken }, signal);
+  if (json.refresh_token && json.refresh_token !== refreshToken) {
+    rotatedRefreshToken = json.refresh_token;
+    console.warn("[spotify] refresh token was rotated; update SPOTIFY_REFRESH_TOKEN if it stops working");
   }
+  cachedToken = accessFrom(json);
+  return json.access_token;
+}
+
+/** The driver's own token. Never falls back to the server token. */
+function customAccessToken(
+  customRt: string,
+  opts: { forceRefresh?: boolean; signal?: AbortSignal },
+): Promise<string> | string {
+  if (opts.forceRefresh) customTokens.delete(customRt);
+  const cached = customTokens.get(customRt);
+  if (cached && cached.expiresAt > Date.now()) return cached.accessToken;
+
+  let pending = customPending.get(customRt);
+  if (!pending) {
+    pending = (async () => {
+      const json = await requestToken({ grant_type: "refresh_token", refresh_token: customRt }, opts.signal);
+      const token = accessFrom(json);
+      if (customTokens.size > 100) {
+        const now = Date.now();
+        for (const [k, v] of customTokens.entries()) {
+          if (v.expiresAt <= now) customTokens.delete(k);
+        }
+        if (customTokens.size > 100) {
+          const firstKey = customTokens.keys().next().value;
+          if (firstKey) customTokens.delete(firstKey);
+        }
+      }
+      customTokens.set(customRt, token);
+      if (json.refresh_token && json.refresh_token !== customRt) {
+        customTokens.set(json.refresh_token, token);
+      }
+      return json.access_token;
+    })().finally(() => {
+      customPending.delete(customRt);
+    });
+    customPending.set(customRt, pending);
+  }
+  return pending;
 }
 
 /**
  * Returns a valid access token, refreshing via the stored refresh token when
  * the cached one is missing, near expiry, or `forceRefresh` is set (after a 401).
  * Concurrent callers share one in-flight refresh.
+ *
+ * Isolation: `driverId` is required and comes from the server (never from the client).
+ * - Non-owner: only their own refresh token. No token means "Conecte seu Spotify"; a failing
+ *   token fails. SPOTIFY_REFRESH_TOKEN and the module caches are never touched.
+ * - Owner: their own token when it differs from the server one, else the server token.
+ *   No fallback between the two in either direction.
  */
 export async function getAccessToken(
-  opts: { forceRefresh?: boolean; signal?: AbortSignal; refreshToken?: string } = {},
+  opts: { driverId: string; forceRefresh?: boolean; signal?: AbortSignal; refreshToken?: string },
 ): Promise<string> {
-  const customRt = opts.refreshToken?.trim();
-  const envRt = process.env.SPOTIFY_REFRESH_TOKEN?.trim();
+  const customRt = opts.refreshToken?.trim() || undefined;
+  const isOwner = opts.driverId === LEGACY_OWNER_DRIVER_ID;
+  const envRt = isOwner ? process.env.SPOTIFY_REFRESH_TOKEN?.trim() : undefined;
 
-  if (customRt && customRt !== envRt) {
-    if (opts.forceRefresh) customTokens.delete(customRt);
-    const cached = customTokens.get(customRt);
-    if (cached && cached.expiresAt > Date.now()) return cached.accessToken;
-
-    let pending = customPending.get(customRt);
-    if (!pending) {
-      pending = (async () => {
-        try {
-          const json = await requestToken(
-            { grant_type: "refresh_token", refresh_token: customRt },
-            opts.signal,
-          );
-          const token: CachedToken = {
-            accessToken: json.access_token,
-            expiresAt: Date.now() + json.expires_in * 1000 - EXPIRY_MARGIN_MS,
-          };
-          if (customTokens.size > 100) {
-            const now = Date.now();
-            for (const [k, v] of customTokens.entries()) {
-              if (v.expiresAt <= now) customTokens.delete(k);
-            }
-            if (customTokens.size > 100) {
-              const firstKey = customTokens.keys().next().value;
-              if (firstKey) customTokens.delete(firstKey);
-            }
-          }
-          customTokens.set(customRt, token);
-          if (json.refresh_token && json.refresh_token !== customRt) {
-            customTokens.set(json.refresh_token, token);
-          }
-          return json.access_token;
-        } catch (customErr) {
-          if (!process.env.VITEST && envRt && !opts.signal?.aborted) {
-            console.warn(
-              "[spotify] custom refresh token failed; falling back to server SPOTIFY_REFRESH_TOKEN",
-              customErr,
-            );
-            customTokens.delete(customRt);
-            if (cachedToken && cachedToken.expiresAt > Date.now()) {
-              return cachedToken.accessToken;
-            }
-            return await refreshAccessToken(opts.signal);
-          }
-          throw customErr;
-        }
-      })().finally(() => {
-        customPending.delete(customRt);
-      });
-      customPending.set(customRt, pending);
-    }
-    return pending;
+  if (!isOwner) {
+    if (!customRt) throw new UserFacingError(CONNECT_SPOTIFY_SPEECH);
+    return customAccessToken(customRt, opts);
   }
+  if (customRt && customRt !== envRt) return customAccessToken(customRt, opts);
 
   if (opts.forceRefresh) cachedToken = undefined;
   if (cachedToken && cachedToken.expiresAt > Date.now()) return cachedToken.accessToken;
 
   if (!pendingRefresh) {
-    pendingRefresh = refreshAccessToken(opts.signal, customRt).finally(() => {
+    pendingRefresh = refreshAccessToken(opts.signal).finally(() => {
       pendingRefresh = undefined;
     });
   }

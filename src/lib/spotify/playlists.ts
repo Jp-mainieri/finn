@@ -1,4 +1,5 @@
 import { spotifyRequest } from "./api";
+import type { SpotifyIdentity } from "./auth";
 
 export interface Playlist {
   id: string;
@@ -17,15 +18,15 @@ interface PlaylistPage {
 
 /** All of the user's playlists (owned + followed), following `next` links. */
 export async function listPlaylists(
+  who: SpotifyIdentity,
   signal?: AbortSignal,
-  refreshToken?: string,
 ): Promise<Playlist[]> {
   const playlists: Playlist[] = [];
   let url: string | null = PLAYLISTS_URL;
   for (let page = 0; url && page < MAX_PAGES; page++) {
     const data: PlaylistPage | null = await spotifyRequest<PlaylistPage>(url, {
+      ...who,
       signal,
-      refreshToken,
     });
     for (const item of data?.items ?? []) {
       if (item?.id && item.name) playlists.push({ id: item.id, name: item.name });

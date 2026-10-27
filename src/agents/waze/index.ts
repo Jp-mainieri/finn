@@ -2,7 +2,7 @@ import { runToolLoop } from "@/lib/agent-runtime";
 import type { Agent, AgentResult } from "@/lib/contracts/a2a";
 import { WAZE_TOOLS } from "@/lib/contracts/tools";
 import { getNeuralakeClient } from "@/lib/neuralake/client";
-import { getAddressBook, LayeredAddressBook } from "@/lib/waze/address-book";
+import { getAddressBook } from "@/lib/waze/address-book";
 import { wazeAgentCard } from "./card";
 import { buildSystemPrompt } from "./prompt";
 import { createNavigateTo, parseContinuation } from "./tools";
@@ -84,9 +84,8 @@ export const wazeAgent: Agent = {
 
   handle: async (input) => {
     const continuation = parseContinuation(input.continuation);
-    const book = input.driverContext?.savedAddresses
-      ? new LayeredAddressBook(input.driverContext.savedAddresses, getAddressBook())
-      : getAddressBook();
+    // The book belongs to input.driverId (server-proven). driverContext.savedAddresses is ignored.
+    const book = getAddressBook(input.driverId);
     const navigateTo = createNavigateTo(book, continuation);
     const result = await runToolLoop({
       agent: "waze",

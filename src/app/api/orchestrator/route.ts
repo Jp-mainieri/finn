@@ -26,22 +26,28 @@ export async function POST(request: Request) {
     return Response.json({ error: "`transcript` is required" }, { status: 400 });
   }
 
-  let driverContext = body.driverContext;
+  // Only the Spotify token of the device is taken from the client (theirs, until delivery 4).
+  // Any other driverContext field (savedAddresses, a stray driverId...) is dropped here.
   const cookieToken =
     getCookie(request, "finn_spotify_token") ?? getCookie(request, "finn_spotify_rt");
-  const bodyRt = driverContext?.spotifyRefreshToken?.trim();
+  const rawRt = body.driverContext?.spotifyRefreshToken;
+  const bodyRt = typeof rawRt === "string" ? rawRt.trim() : undefined;
   const validBodyRt = bodyRt && bodyRt !== "undefined" && bodyRt !== "null" ? bodyRt : undefined;
-
-  if (!validBodyRt && cookieToken) {
-    driverContext = { ...driverContext, spotifyRefreshToken: cookieToken };
-  } else if (validBodyRt) {
-    driverContext = { ...driverContext, spotifyRefreshToken: validBodyRt };
-  }
+  const spotifyRefreshToken = validBodyRt ?? cookieToken;
+  // Presence of a context (even empty) is what makes the waze agent keep emitting `save_address`
+  // for the current PWA; its content is never trusted beyond the Spotify token.
+  const driverContext =
+    (typeof body.driverContext === "object" && body.driverContext !== null) || cookieToken
+      ? spotifyRefreshToken
+        ? { spotifyRefreshToken }
+        : {}
+      : undefined;
 
   const response = await orchestrate(transcript, {
     agents,
-    contextId: body.contextId || crypto.randomUUID(),
+    contextId: typeof body.contextId === "string" && body.contextId ? body.contextId : crypto.randomUUID(),
     continuation: body.continuation,
+    driverId: auth.driverId,
     driverContext,
   });
   return Response.json(response);

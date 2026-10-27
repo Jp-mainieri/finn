@@ -121,7 +121,7 @@ describe("POST /api/agents/[agent]", () => {
     });
     expect(seen).toHaveLength(1);
     expect(seen[0].driverId).toBe(TEST_OWNER_ID);
-    expect(seen[0].driverContext).toBeUndefined();
+    expect("driverContext" in seen[0]).toBe(false);
     // The raw continuation is handed over (the real agent parses it strictly); nothing else carries the id.
     expect(JSON.stringify({ ...seen[0], continuation: undefined })).not.toContain(OTHER);
   });

@@ -20,6 +20,10 @@ export interface OpenUrlAction {
   label?: string;
 }
 
+/**
+ * @deprecated Removed in 5b. The server no longer emits it (addresses live in the server store, per driver).
+ * Kept only so src/lib/voice still type-checks.
+ */
 export interface SaveAddressAction {
   type: "save_address";
   label: "casa" | "trabalho";
@@ -32,7 +36,7 @@ export interface OrchestratorRequest {
   contextId?: string;
   /** Echo of the previous response's `continuation`, if any (within the same conversation window). */
   continuation?: Continuation;
-  /** Optional per-driver context (saved addresses, Spotify token) for multi-user support. */
+  /** @deprecated Removed in 5b. The server ignores it: it reads only `transcript`, `contextId` and `continuation`. */
   driverContext?: DriverContext;
 }
 

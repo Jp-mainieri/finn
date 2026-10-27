@@ -123,15 +123,14 @@ describe("orchestrate", () => {
     });
   });
 
-  it("passes driverContext to agent.handle", async () => {
+  it("does not forward a driverContext to agent.handle (the contract no longer has one)", async () => {
     const agents = {
       spotify: fakeAgent("spotify", 0),
       waze: fakeAgent("waze", 0, { speech: "Indo." }),
     };
     const driverContext = {};
-    await orchestrate("toca rock", { agents, contextId: "ctx", driverId: TEST_OWNER_ID, driverContext });
-    expect(agents.spotify.handle).toHaveBeenCalledWith(
-      expect.objectContaining({ driverContext }),
-    );
+    await orchestrate("toca rock", { agents, contextId: "ctx", driverId: TEST_OWNER_ID, driverContext } as Parameters<typeof orchestrate>[1]);
+    const given = vi.mocked(agents.spotify.handle).mock.calls[0][0];
+    expect("driverContext" in given).toBe(false);
   });
 });

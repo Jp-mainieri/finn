@@ -149,7 +149,7 @@ describe(" e2e through the real route + real auth (non-owner B with a real sessi
     expect(text).not.toContain("Motorista");
   });
 
-  it("PWA regression: driverContext present -> save_address emitted with the normalized address; absent -> not emitted", async () => {
+  it("old PWA in cache: a driverContext in the body is ignored and save_address is never emitted (with or without it)", async () => {
     llm.scripts.waze = { turns: [call("navigate_to", { destination: "  Rua Augusta,   123 " }), say("Certo.")] };
     const withCtx = await (
       await post(
@@ -157,8 +157,8 @@ describe(" e2e through the real route + real auth (non-owner B with a real sessi
         TEST_TOKEN,
       )
     ).json();
-    expect(withCtx.clientActions.map((a: { type: string }) => a.type).sort()).toEqual(["open_url", "save_address"]);
-    expect(withCtx.clientActions.find((a: { type: string }) => a.type === "save_address")).toMatchObject({ label: "trabalho", address: "Rua Augusta, 123" });
+    expect(withCtx.clientActions.map((a: { type: string }) => a.type)).toEqual(["open_url"]);
+    expect(JSON.stringify(withCtx)).not.toContain("IGNORADO");
     llm.reset();
     llm.scripts.waze = { turns: [call("navigate_to", { destination: "Rua Augusta, 123" }), say("Certo.")] };
     const noCtx = await (

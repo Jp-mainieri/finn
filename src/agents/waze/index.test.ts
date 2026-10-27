@@ -1,3 +1,4 @@
+import type { AgentTaskInput } from "@/lib/contracts/a2a";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_OWNER_ID } from "../../../tests/helpers/owner";
 import type { Agent, AgentResult } from "@/lib/contracts/a2a";
@@ -236,7 +237,7 @@ describe("wazeAgent through the orchestrator", () => {
       contextId: "ctx",
       driverId: TEST_OWNER_ID,
       driverContext: { savedAddresses: { casa: "Custom Driver Casa" } },
-    });
+    } as AgentTaskInput);
     expect(res.status).toBe("completed");
     expect(res.clientActions).toEqual([
       {
@@ -335,7 +336,7 @@ describe("wazeAgent through the orchestrator", () => {
     });
   });
 
-  it("emits save_address clientAction when driverContext is provided", async () => {
+  it("never emits save_address, even when an old client's driverContext is smuggled in", async () => {
     useModel(navigateScript("Rua Oscar Freire, 100"));
     const res = await wazeAgent.handle({
       transcript: "Rua Oscar Freire, 100",
@@ -343,7 +344,7 @@ describe("wazeAgent through the orchestrator", () => {
       continuation: { pendingLabel: "casa" },
       driverId: TEST_OWNER_ID,
       driverContext: {},
-    });
+    } as AgentTaskInput);
     expect(res.status).toBe("completed");
     expect(res.clientActions).toEqual([
       {
@@ -351,12 +352,8 @@ describe("wazeAgent through the orchestrator", () => {
         url: "https://waze.com/ul?q=Rua%20Oscar%20Freire%2C%20100&navigate=yes",
         label: "Navegar para casa",
       },
-      {
-        type: "save_address",
-        label: "casa",
-        address: "Rua Oscar Freire, 100",
-      },
     ]);
+    expect(JSON.stringify(res)).not.toContain("save_address");
   });
 
   it("exposes keywords and failureSpeech", () => {

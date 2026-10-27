@@ -1,3 +1,4 @@
+import type { AgentTaskInput } from "@/lib/contracts/a2a";
 import { TEST_OWNER_ID } from "../../../tests/helpers/owner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, CompletionRequest } from "@/lib/contracts/neuralake";
@@ -235,8 +236,9 @@ describe("spotifyAgent wiring: the driverId given to the agent decides whose tok
   const B = "drv_" + "B".repeat(22);
   const C = "drv_" + "C".repeat(22);
   const TOKEN_URL = "https://accounts.spotify.com/api/token";
+  // `driverContext` no longer exists in the contract; an old client's field is smuggled in to prove it is ignored.
   const runAs = (driverId: string, transcript: string, driverContext?: { spotifyRefreshToken?: string }) =>
-    spotifyAgent.handle({ transcript, contextId: "ctx", driverId, driverContext });
+    spotifyAgent.handle({ transcript, contextId: "ctx", driverId, driverContext } as AgentTaskInput);
   let vault: Awaited<ReturnType<typeof useTestTokenVault>>;
   beforeEach(async () => {
     vault = await useTestTokenVault(vi.stubEnv);

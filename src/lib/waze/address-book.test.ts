@@ -1,4 +1,4 @@
-import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { TEST_OWNER_ID } from "../../../tests/helpers/owner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DriverStoreUnavailableError } from "@/lib/driver/store";
 import {
@@ -203,7 +203,7 @@ describe("UpstashAddressBook (real SDK, fake fetch)", () => {
 });
 
 describe("getAddressBook", () => {
-  const OWNER = LEGACY_OWNER_DRIVER_ID;
+  const OWNER = TEST_OWNER_ID;
   beforeEach(() => {
     resetAddressBook();
     vi.spyOn(console, "warn").mockImplementation(() => {});

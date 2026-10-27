@@ -1,4 +1,4 @@
-import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { TEST_OWNER_ID } from "../../../tests/helpers/owner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, CompletionRequest } from "@/lib/contracts/neuralake";
 import { SPOTIFY_TOOLS } from "@/lib/contracts/tools";
@@ -45,7 +45,7 @@ function install(opts: FakeSpotifyOptions = {}) {
   return fake;
 }
 
-const run = (transcript: string) => spotifyAgent.handle({ transcript, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
+const run = (transcript: string) => spotifyAgent.handle({ transcript, contextId: "ctx", driverId: TEST_OWNER_ID });
 
 function lastToolResult(req: CompletionRequest): unknown {
   const last = req.messages.at(-1);
@@ -291,7 +291,7 @@ describe("spotifyAgent wiring: the driverId given to the agent decides whose tok
   it("the owner still uses the server token, whatever driverContext carries", async () => {
     const fake = install();
     scripted(toolCallMessage("play_playlist", { playlist_name: "rock nacional" }), textMessage("Tocando."));
-    const res = await runAs(LEGACY_OWNER_DRIVER_ID, "toca rock nacional", { spotifyRefreshToken: "owner-from-client" });
+    const res = await runAs(TEST_OWNER_ID, "toca rock nacional", { spotifyRefreshToken: "owner-from-client" });
     expect(res.status).toBe("completed");
     const body = fake.find("POST", TOKEN_URL)[0].body ?? "";
     expect(body).toContain("refresh_token=refresh-token");

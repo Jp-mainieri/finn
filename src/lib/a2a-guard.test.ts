@@ -15,6 +15,8 @@ import {
   type DriverStore,
 } from "./driver";
 import { RATELIMIT_SCRIPT } from "./driver/upstash-store";
+import { TEST_OWNER_ID } from "../../tests/helpers/owner";
+void TEST_OWNER_ID;
 
 const A2A = "9c1e47d2b86a30f5e7d4c2a91b68f03e5d7a24c9e1b0836f4a5d2c7e91f0b3a8";
 const NEXT = "5d2b8f1a7c3e904d6b1a8e5f2c7d03a94b6e1f8c5a2d7039e4b1c6f8a5d20e73";

@@ -3,8 +3,8 @@ import { UserFacingError } from "@/lib/agent-runtime";
 import { NO_DEVICE_SPEECH } from "./api";
 import { resetSpotifyTokenCache } from "./auth";
 import { controlPlayback, pickDevice, playContext, type SpotifyDevice } from "./player";
-import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
-const OWNER = { driverId: LEGACY_OWNER_DRIVER_ID };
+import { TEST_OWNER_ID } from "../../../tests/helpers/owner";
+const OWNER = { driverId: TEST_OWNER_ID };
 import { createFakeSpotify, json, spotifyError, stubSpotifyEnv, type RecordedCall } from "./testing";
 
 const device = (id: string, type: string, extra: Partial<SpotifyDevice> = {}): SpotifyDevice => ({

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LEGACY_OWNER_DRIVER_ID, resetA2ADisabledLogForTests } from "@/lib/auth";
+import { resetA2ADisabledLogForTests } from "@/lib/auth";
+import { TEST_OWNER_ID } from "../../../../../tests/helpers/owner";
 import type { AgentResult, AgentTaskInput } from "@/lib/contracts/a2a";
 
 const seen: AgentTaskInput[] = [];
@@ -119,7 +120,7 @@ describe("POST /api/agents/[agent]", () => {
       },
     });
     expect(seen).toHaveLength(1);
-    expect(seen[0].driverId).toBe(LEGACY_OWNER_DRIVER_ID);
+    expect(seen[0].driverId).toBe(TEST_OWNER_ID);
     expect(seen[0].driverContext).toBeUndefined();
     // The raw continuation is handed over (the real agent parses it strictly); nothing else carries the id.
     expect(JSON.stringify({ ...seen[0], continuation: undefined })).not.toContain(OTHER);

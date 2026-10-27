@@ -1,3 +1,4 @@
+import { TEST_OWNER_ID } from "../../tests/helpers/owner"; // importing it also sets FINN_OWNER_DRIVER_ID
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authorizeA2A, resetA2ADisabledLogForTests } from "./auth";
 
@@ -129,6 +130,7 @@ describe("authorizeDriver", () => {
   describe("legacy token flag", () => {
     it("legacy driverId constant has the driverId format", () => {
       expect(isValidDriverId(LEGACY_OWNER_DRIVER_ID)).toBe(true);
+      expect(isValidDriverId(TEST_OWNER_ID)).toBe(true);
     });
 
     it.each([undefined, "", "true", "0", " 1", "1 ", "01", "yes", "TRUE"])("is OFF when flag is %j", async (flag) => {
@@ -139,10 +141,10 @@ describe("authorizeDriver", () => {
       expect((r as Response).status).toBe(401);
     });
 
-    it("is ON only with exactly '1' and returns the fixed owner id", async () => {
+    it("is ON only with exactly '1' and returns the owner id (FINN_OWNER_DRIVER_ID)", async () => {
       vi.stubEnv("FINN_API_TOKEN", "s3cret");
       vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", "1");
-      expect(await authorizeDriver(req("Bearer s3cret"))).toEqual({ driverId: LEGACY_OWNER_DRIVER_ID });
+      expect(await authorizeDriver(req("Bearer s3cret"))).toEqual({ driverId: TEST_OWNER_ID });
       for (const bad of ["Bearer s3cre", "Bearer s3cretx", "Bearer nope", "s3cret", "Bearer "]) {
         expect(((await authorizeDriver(req(bad))) as Response).status).toBe(401);
       }

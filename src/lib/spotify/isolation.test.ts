@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UserFacingError } from "@/lib/agent-runtime";
-import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { TEST_OWNER_ID } from "../../../tests/helpers/owner";
 import { DriverStoreUnavailableError } from "@/lib/driver";
 import { spotifyRequest } from "./api";
 import {
@@ -16,7 +16,7 @@ import { decryptToken, encryptToken } from "./token-crypto";
 import { loadSpotifyRefreshToken, tokenAad } from "./token-vault";
 import { createFakeSpotify, json, stubSpotifyEnv, TEST_ENC_KEY, TOKEN_URL, useTestTokenVault } from "./testing";
 
-const OWNER = { driverId: LEGACY_OWNER_DRIVER_ID };
+const OWNER = { driverId: TEST_OWNER_ID };
 const B = { driverId: "drv_" + "B".repeat(22) };
 const C = { driverId: "drv_" + "C".repeat(22) };
 const SERVER_RT = "refresh-token"; // value set by stubSpotifyEnv

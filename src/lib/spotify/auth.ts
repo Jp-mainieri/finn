@@ -1,5 +1,5 @@
 import { UserFacingError } from "@/lib/agent-runtime";
-import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { getOwnerDriverId, isOwner as isOwnerDriver } from "@/lib/auth";
 import { MissingEnvError, requireEnv } from "@/lib/env";
 import { getDriverStore } from "@/lib/driver";
 import { fetchSpotifyProfile, SPOTIFY_HTTP_TIMEOUT_MS } from "./profile";
@@ -27,6 +27,8 @@ export const ACCOUNT_UNAVAILABLE_SPEECH = "Não consegui acessar sua conta do Sp
 interface CachedToken {
   accessToken: string;
   expiresAt: number;
+  /** Which source minted it. An entry is only served while the driver is still of that kind (owner or not). */
+  owner: boolean;
 }
 
 // Access tokens live in memory per driverId (never keyed by a refresh token), one in-flight refresh per driver.
@@ -133,8 +135,8 @@ export interface SpotifyIdentity {
   driverId: string;
 }
 
-function accessFrom(json: TokenResponse): CachedToken {
-  return { accessToken: json.access_token, expiresAt: Date.now() + json.expires_in * 1000 - EXPIRY_MARGIN_MS };
+function accessFrom(json: TokenResponse, owner: boolean): CachedToken {
+  return { accessToken: json.access_token, expiresAt: Date.now() + json.expires_in * 1000 - EXPIRY_MARGIN_MS, owner };
 }
 
 /** The driver's own refresh token from the vault. Absent, undecryptable or vault off: the driver hears a fixed phrase. */
@@ -152,7 +154,7 @@ async function driverRefreshToken(driverId: string): Promise<string> {
 
 async function refreshFor(driverId: string, signal?: AbortSignal): Promise<string> {
   const epoch = epochs.get(driverId) ?? 0;
-  const isOwner = driverId === LEGACY_OWNER_DRIVER_ID;
+  const isOwner = isOwnerDriver(driverId);
   // Owner: the server token, ignoring anything a client could send. Others: only their own blob, no fallback.
   const refreshToken = isOwner
     ? (ownerRotatedRefreshToken ?? spotifyEnv("SPOTIFY_REFRESH_TOKEN"))
@@ -187,7 +189,7 @@ async function refreshFor(driverId: string, signal?: AbortSignal): Promise<strin
       if (first !== undefined) accessTokens.delete(first);
     }
   }
-  accessTokens.set(driverId, accessFrom(json));
+  accessTokens.set(driverId, accessFrom(json, isOwner));
   return json.access_token;
 }
 
@@ -197,7 +199,7 @@ async function refreshFor(driverId: string, signal?: AbortSignal): Promise<strin
  *
  * Isolation: `driverId` is required and comes from the server (never from the client); the cache
  * and the in-flight map are keyed by it.
- * - Owner (LEGACY_OWNER_DRIVER_ID): SPOTIFY_REFRESH_TOKEN of the server.
+ * - Owner (getOwnerDriverId): SPOTIFY_REFRESH_TOKEN of the server.
  * - Anyone else: only their own encrypted token. Not connected means "Conecte seu Spotify"; a
  *   failing token fails. SPOTIFY_REFRESH_TOKEN is never used.
  */
@@ -205,7 +207,12 @@ export async function getAccessToken(opts: { driverId: string; forceRefresh?: bo
   const { driverId } = opts;
   if (opts.forceRefresh) accessTokens.delete(driverId);
   const cached = accessTokens.get(driverId);
-  if (cached && cached.expiresAt > Date.now()) return cached.accessToken;
+  if (cached && cached.owner !== isOwnerDriver(driverId)) {
+    // The owner changed inside this process (env change): a token minted from the server account must not
+    // outlive the ownership, and a guest's token is not the owner's.
+    accessTokens.delete(driverId);
+    pendingRefresh.delete(driverId);
+  } else if (cached && cached.expiresAt > Date.now()) return cached.accessToken;
 
   let pending = pendingRefresh.get(driverId);
   if (!pending) {
@@ -242,9 +249,13 @@ export async function exchangeAuthorizationCode(
  */
 export async function getOwnerSpotifyUserId(env: Record<string, string | undefined> = process.env): Promise<string | null> {
   if (!env.SPOTIFY_REFRESH_TOKEN?.trim()) return null;
+  // The server token has an owner or nobody reaches it: with a token present and no owner, fail closed
+  // (callers refuse) instead of reading it for a lookup.
+  const ownerDriverId = getOwnerDriverId(env);
+  if (!ownerDriverId) throw new Error("no owner configured");
   if (ownerSpotifyUserId) return ownerSpotifyUserId;
   // Both the owner's refresh and /v1/me are bounded (5 s each); an abort is just a failure to the caller (no log, no detail).
-  const accessToken = await getAccessToken({ driverId: LEGACY_OWNER_DRIVER_ID, signal: AbortSignal.timeout(SPOTIFY_HTTP_TIMEOUT_MS) });
+  const accessToken = await getAccessToken({ driverId: ownerDriverId, signal: AbortSignal.timeout(SPOTIFY_HTTP_TIMEOUT_MS) });
   const profile = await fetchSpotifyProfile(accessToken);
   if (!profile) throw new Error("owner profile unavailable");
   ownerSpotifyUserId = profile.id;

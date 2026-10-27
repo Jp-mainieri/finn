@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UserFacingError } from "@/lib/agent-runtime";
-import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { TEST_OWNER_ID } from "../../../tests/helpers/owner";
 import {
   NO_DEVICE_SPEECH,
   PREMIUM_REQUIRED_SPEECH,
@@ -26,7 +26,7 @@ import {
   type FakeSpotifyOptions,
 } from "./testing";
 
-const OWNER = { driverId: LEGACY_OWNER_DRIVER_ID };
+const OWNER = { driverId: TEST_OWNER_ID };
 
 function install(opts?: FakeSpotifyOptions) {
   const fake = createFakeSpotify(opts);

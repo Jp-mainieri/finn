@@ -8,7 +8,7 @@
  * - connection: connected or not; disconnect.
  * Nothing here logs; errors from the SDK, Spotify and decryption are neither logged nor passed on.
  */
-import { authorizeDriver, LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { authorizeDriver, isOwner } from "@/lib/auth";
 import { getDriverStore, type DriverStore } from "@/lib/driver";
 import { evictSpotifyAccessToken, exchangeAuthorizationCode, getOwnerSpotifyUserId } from "./auth";
 import { buildAuthorizeUrl, escapeHtml, htmlPage, isDevelopmentFlow, OAUTH_STATE_COOKIE, redirectUriFor } from "./oauth";
@@ -33,7 +33,7 @@ export async function handleConnect(request: Request, deps: ConnectDeps = {}): P
   const auth = await authorizeDriver(request, deps.store ? { store: deps.store } : {});
   if (auth instanceof Response) return auth;
   // The owner uses SPOTIFY_REFRESH_TOKEN of the server; a stored token for the owner id would be ignored.
-  if (auth.driverId === LEGACY_OWNER_DRIVER_ID) {
+  if (isOwner(auth.driverId, env)) {
     return Response.json({ error: "The owner does not connect Spotify here" }, { status: 403, headers: noStore });
   }
 
@@ -123,7 +123,7 @@ export async function handleCallback(request: Request, deps: ConnectDeps = {}): 
   try {
     // The record must still point at a live, active driver (revoked, purged or unknown: nothing is stored);
     // the owner id never gets a stored token.
-    if (driverId === LEGACY_OWNER_DRIVER_ID) return failurePage(400);
+    if (isOwner(driverId, deps.env ?? process.env)) return failurePage(400);
     const driver = await store.getDriver(driverId);
     if (!driver || driver.status !== "active") return failurePage(400);
 
@@ -175,7 +175,7 @@ export async function handleConnectionStatus(request: Request, deps: ConnectDeps
   const auth = await authorizeDriver(request, deps.store ? { store: deps.store } : {});
   if (auth instanceof Response) return auth;
   // The owner is "connected" through the server token; the vault (and its key) are not involved.
-  if (auth.driverId === LEGACY_OWNER_DRIVER_ID) return Response.json({ connected: ownerConnected(deps.env ?? process.env) }, { headers: noStore });
+  if (isOwner(auth.driverId, deps.env ?? process.env)) return Response.json({ connected: ownerConnected(deps.env ?? process.env) }, { headers: noStore });
   try {
     // A blob that does not decrypt reads as null: not connected.
     const token = await loadSpotifyRefreshToken(auth.driverId, deps);
@@ -194,7 +194,7 @@ export async function handleDisconnect(request: Request, deps: ConnectDeps = {})
   } catch {
     return unavailable();
   }
-  if (auth.driverId === LEGACY_OWNER_DRIVER_ID) {
+  if (isOwner(auth.driverId, deps.env ?? process.env)) {
     // Only clears a residual blob; the server token stays, so the answer is the same as GET's.
     return Response.json({ connected: ownerConnected(deps.env ?? process.env) }, { headers: noStore });
   }

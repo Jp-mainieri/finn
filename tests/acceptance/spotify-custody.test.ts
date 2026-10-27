@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
-import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { TEST_OWNER_ID } from "../helpers/owner";
 import { DriverStoreUnavailableError, MemoryDriverStore, setDriverStoreForTests, signSessionToken } from "@/lib/driver";
 import { evictSpotifyAccessToken, getAccessToken, resetSpotifyTokenCache } from "@/lib/spotify/auth";
 import { decryptToken, encryptToken } from "@/lib/spotify/token-crypto";
@@ -356,9 +356,9 @@ describe("QA rotation, disconnect and concurrency", () => {
   it("rotated token for the OWNER is kept only in memory and never written to the store", async () => {
     rotatingFake("owner-new-QA");
     const set = vi.spyOn(store, "setSpotifyBlob");
-    await getAccessToken({ driverId: LEGACY_OWNER_DRIVER_ID });
+    await getAccessToken({ driverId: TEST_OWNER_ID });
     expect(set).not.toHaveBeenCalled();
-    await getAccessToken({ driverId: LEGACY_OWNER_DRIVER_ID, forceRefresh: true });
+    await getAccessToken({ driverId: TEST_OWNER_ID, forceRefresh: true });
     expect(new URLSearchParams(grantCalls("refresh_token")[1].body ?? "").get("refresh_token")).toBe("owner-new-QA");
     expect(logged()).not.toContain("owner-new-QA");
   });
@@ -414,7 +414,7 @@ describe("QA rotation, disconnect and concurrency", () => {
   });
 });
 
-describe("owner (LEGACY_OWNER_DRIVER_ID): connected through the server token, never through the vault", () => {
+describe("owner (TEST_OWNER_ID): connected through the server token, never through the vault", () => {
   const ownerHeaders = () => {
     vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", "1");
     vi.stubEnv("FINN_API_TOKEN", "legacy-" + "ab".repeat(20));
@@ -442,24 +442,24 @@ describe("owner (LEGACY_OWNER_DRIVER_ID): connected through the server token, ne
   });
 
   it("saveSpotifyRefreshToken refuses the legacy id, so no blob can ever sit under it", async () => {
-    await expect(saveSpotifyRefreshToken(LEGACY_OWNER_DRIVER_ID, "x-tok", { store })).rejects.toThrow();
-    expect(await store.getSpotifyBlob(LEGACY_OWNER_DRIVER_ID)).toBeNull();
+    await expect(saveSpotifyRefreshToken(TEST_OWNER_ID, "x-tok", { store })).rejects.toThrow();
+    expect(await store.getSpotifyBlob(TEST_OWNER_ID)).toBeNull();
   });
 
   it("a state minted for the owner id earlier is refused by the callback: nothing exchanged, nothing stored", async () => {
-    const state = await store.createOAuthState(LEGACY_OWNER_DRIVER_ID);
+    const state = await store.createOAuthState(TEST_OWNER_ID);
     expect((await callback(`code=${CODE}&state=${state}`)).status).toBe(400);
     expect(grantCalls("authorization_code")).toHaveLength(0);
-    expect(await store.getSpotifyBlob(LEGACY_OWNER_DRIVER_ID)).toBeNull();
+    expect(await store.getSpotifyBlob(TEST_OWNER_ID)).toBeNull();
   });
 
   it("DELETE still works for the legacy id: clears a residual blob and answers the same connected as GET; the server token stays in use", async () => {
     const t = ownerHeaders();
-    await store.setSpotifyBlob(LEGACY_OWNER_DRIVER_ID, encryptToken("old", KEY, tokenAad(LEGACY_OWNER_DRIVER_ID)));
+    await store.setSpotifyBlob(TEST_OWNER_ID, encryptToken("old", KEY, tokenAad(TEST_OWNER_ID)));
     const res = await disconnect(t);
     expect(await res.json()).toEqual({ connected: true });
-    expect(await store.getSpotifyBlob(LEGACY_OWNER_DRIVER_ID)).toBeNull();
-    await expect(getAccessToken({ driverId: LEGACY_OWNER_DRIVER_ID })).resolves.toBeTypeOf("string");
+    expect(await store.getSpotifyBlob(TEST_OWNER_ID)).toBeNull();
+    await expect(getAccessToken({ driverId: TEST_OWNER_ID })).resolves.toBeTypeOf("string");
     vi.stubEnv("SPOTIFY_REFRESH_TOKEN", "");
     expect(await (await disconnect(t)).json()).toEqual({ connected: false });
   });
@@ -766,7 +766,7 @@ describe("QA Redis degraded", () => {
 
   it("the OWNER never touches Redis for the token (voice for the owner is immune to Redis slowness once the vault is not consulted)", async () => {
     const get = vi.spyOn(store, "getSpotifyBlob").mockImplementation(() => new Promise(() => {}));
-    await expect(getAccessToken({ driverId: LEGACY_OWNER_DRIVER_ID })).resolves.toBeTypeOf("string");
+    await expect(getAccessToken({ driverId: TEST_OWNER_ID })).resolves.toBeTypeOf("string");
     expect(get).not.toHaveBeenCalled();
   });
 
@@ -811,7 +811,7 @@ describe("QA log sweep on the refresh paths and reconnect", () => {
     resetSpotifyTokenCache();
     await getAccessToken({ driverId: a.id });
     resetSpotifyTokenCache();
-    await getAccessToken({ driverId: LEGACY_OWNER_DRIVER_ID });
+    await getAccessToken({ driverId: TEST_OWNER_ID });
     const text = logged();
     for (const secret of ["b-LOGSWEEP-token", "b-LOGSWEEP-new", "acc-LOGSWEEP", "server-owner-rt", "client-secret"]) expect(text).not.toContain(secret);
   });

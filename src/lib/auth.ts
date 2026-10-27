@@ -1,30 +1,41 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { authenticateSession, getDriverStore, getSessionSecret, type DriverStore } from "@/lib/driver";
-
-const A2A_MIN_LENGTH = 32;
+import { authenticateSession, getDriverStore, isAcceptableSecret, getSessionSecret, type DriverStore } from "@/lib/driver";
 
 /** Fixed-size digest compare: neither content nor length of the secret leaks through timing. */
 function digestEquals(given: string, expected: string): boolean {
   return timingSafeEqual(createHash("sha256").update(given).digest(), createHash("sha256").update(expected).digest());
 }
 
-/** Valid secret: >= 32 chars, no whitespace inside, at least 10 distinct chars (rejects "aaaa...", "1234...", placeholders). */
-function isValidA2ASecret(value: string): boolean {
-  return value.length >= A2A_MIN_LENGTH && !/\s/.test(value) && new Set(value).size >= 10;
+let a2aDisabledLogged = false;
+
+/** One value-free diagnostic line per process; does not distinguish the exact reason. */
+function a2aDisabled(): Response {
+  if (!a2aDisabledLogged) {
+    a2aDisabledLogged = true;
+    console.error("[a2a] disabled: FINN_A2A_TOKEN missing or invalid");
+  }
+  return Response.json({ error: "A2A endpoint disabled" }, { status: 503 });
+}
+
+/** Test hook: re-arms the once-per-process log line. */
+export function resetA2ADisabledLogForTests(): void {
+  a2aDisabledLogged = false;
 }
 
 /**
  * Auth for the A2A endpoint /api/agents/[agent] (POST): `Authorization: Bearer <FINN_A2A_TOKEN>`.
  * A secret of its own: FINN_API_TOKEN is never accepted here. Returns an error Response, or null when authorized.
- * Off (503, fail closed) when FINN_A2A_TOKEN is absent, empty, whitespace-only or invalid; 503 and not 401 because
+ * Secret format: same rule as FINN_SESSION_SECRET (isAcceptableSecret: 64 hex, >= 8 distinct chars), and it must
+ * differ from FINN_API_TOKEN. Off (503, fail closed) when FINN_A2A_TOKEN is absent, empty, whitespace-only, invalid
+ * or equal to FINN_API_TOKEN; 503 and not 401 because
  * it is a server state, not a client credential error. Missing or wrong Bearer: 401 + WWW-Authenticate.
  * Never logs values.
  */
 export function authorizeA2A(request: Request): Response | null {
   const expected = process.env.FINN_A2A_TOKEN?.trim();
-  if (!expected || !isValidA2ASecret(expected)) {
-    return Response.json({ error: "A2A endpoint disabled" }, { status: 503 });
-  }
+  if (!expected || !isAcceptableSecret(expected)) return a2aDisabled();
+  const api = process.env.FINN_API_TOKEN?.trim();
+  if (api && digestEquals(api, expected)) return a2aDisabled();
   const token = extractBearer(request);
   if (!token || !digestEquals(token, expected)) return UNAUTHORIZED();
   return null;

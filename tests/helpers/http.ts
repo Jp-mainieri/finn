@@ -10,7 +10,7 @@ import type { OrchestratorResponse } from "@/lib/contracts/client-events";
 
 export const ORIGIN = "https://finn.test";
 export const TEST_TOKEN = "test-finn-token-0123456789";
-export const TEST_A2A_TOKEN = "test-a2a-token-0123456789abcdef-0123456789";
+export const TEST_A2A_TOKEN = "9c1e47d2b86a30f5e7d4c2a91b68f03e5d7a24c9e1b0836f4a5d2c7e91f0b3a8";
 
 export interface CallOptions {
   /** Bearer token; `null` sends no Authorization header. Defaults to TEST_TOKEN (TEST_A2A_TOKEN for callA2A). */

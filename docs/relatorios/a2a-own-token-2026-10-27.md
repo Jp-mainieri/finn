@@ -20,3 +20,12 @@
 
 5. Desvios
 - `docs/ARCHITECTURE.md` linha 62 ainda diz que `/api/agents/*` usa `FINN_API_TOKEN` via `authorize()`; fora do meu escopo, precisa de docs-sync. Idem `tests/MANUAL.md` e `tests/smoke/smoke.mjs` (não verifiquei se chamam o A2A com o token compartilhado).
+
+## Rodada de correções
+- Item 1 (N1/M3) corrigido: FINN_A2A_TOKEN igual a FINN_API_TOKEN (digest, após trim) -> 503 igual ao "desligado". O orchestrator segue aceitando o valor como API token pelo caminho legado (comportamento existente, não alterado; o teste confirma que A2A não o afeta).
+- Item 2 (M2/N5) corrigido: `authorizeA2A` reutiliza `isAcceptableSecret` de `@/lib/driver` (64 hex, >= 8 distintos, maiúsculas/minúsculas aceitas), sem mudar nada do que existia. Comentário de "1234..." removido. Testes: 31/32/63/64/65, não-hex, poucos distintos (2 e 7), espaço interno, maiúsculas.
+- Item 3 (N2) corrigido: uma linha `[a2a] disabled: FINN_A2A_TOKEN missing or invalid` por processo (flag em módulo, `resetA2ADisabledLogForTests` só para teste). Teste com espião: 1 chamada, sem nenhum valor.
+- Item 4 (B1/B2) corrigido: smoke aceita 401 ou 503 para /api/agents/* sem token/token errado, com mensagem nova; chamada autenticada ao A2A só com FINN_A2A_TOKEN, senão pula com aviso; orchestrator segue com FINN_API_TOKEN. tests/MANUAL.md atualizado.
+- Item 5 corrigido: .env.example (64 hex, openssl rand -hex 32, diferir do API token, sem a variável fica desligado; valor vazio).
+- Testes: `npm test` 558 passed, 4 skipped (antes da rodada 549). typecheck, lint, build ok. Nenhum teste removido ou afrouxado; o token de teste A2A virou 64 hex.
+- Não verificado: o smoke não foi rodado contra um deploy real (só `node --check` de sintaxe). Sem rede.

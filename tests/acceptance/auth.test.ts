@@ -77,7 +77,7 @@ describe("[core] auth — Bearer FINN_API_TOKEN (orchestrator) / FINN_A2A_TOKEN 
       expect(h.spotify.calls).toHaveLength(0);
     });
 
-    it.each([["unset", undefined], ["empty", ""], ["spaces", "   "], ["short", "short-secret"], ["trivial", "a".repeat(40)]])(
+    it.each([["unset", undefined], ["empty", ""], ["spaces", "   "], ["short", "short-secret"], ["trivial", "a".repeat(64)], ["equal to FINN_API_TOKEN", TEST_TOKEN]])(
       "is off (503) when FINN_A2A_TOKEN is %s, and FINN_API_TOKEN still does not open it",
       async (_l, value) => {
         vi.stubEnv("FINN_A2A_TOKEN", value);
@@ -87,6 +87,15 @@ describe("[core] auth — Bearer FINN_API_TOKEN (orchestrator) / FINN_A2A_TOKEN 
         expect(h.spotify.calls).toHaveLength(0);
       },
     );
+
+    it("equal FINN_A2A_TOKEN and FINN_API_TOKEN: A2A stays off for both values; the orchestrator is unaffected by A2A", async () => {
+      vi.stubEnv("FINN_A2A_TOKEN", TEST_A2A_TOKEN);
+      vi.stubEnv("FINN_API_TOKEN", TEST_A2A_TOKEN);
+      expect((await send(TEST_A2A_TOKEN)).status).toBe(503);
+      expect(llm.calls).toHaveLength(0);
+      expect(h.spotify.calls).toHaveLength(0);
+      expect((await callOrchestrator({ transcript: "pausa a música" }, { token: TEST_A2A_TOKEN })).status).toBe(200); // legacy API-token path, unchanged
+    });
 
     it("does not affect /api/orchestrator (FINN_API_TOKEN still works there, FINN_A2A_TOKEN does not)", async () => {
       vi.stubEnv("FINN_A2A_TOKEN", "");

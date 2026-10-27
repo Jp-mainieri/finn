@@ -6,7 +6,8 @@
  *
  * Env:
  *   BASE_URL                         required, e.g. https://finn-git-feat-x.vercel.app
- *   FINN_API_TOKEN                   optional; without it only public/unauthorized checks run
+ *   FINN_API_TOKEN                   optional; without it only public/unauthorized checks run (/api/orchestrator)
+ *   FINN_A2A_TOKEN                   optional; the authenticated A2A call runs only with it (A2A has its own secret)
  *   SMOKE_SKIP_LLM=1                 skip the one call that reaches Neuralake (navigation)
  *   VERCEL_AUTOMATION_BYPASS_SECRET  optional, for previews behind Deployment Protection
  *
@@ -16,6 +17,7 @@
 
 const BASE_URL = (process.env.BASE_URL ?? "").replace(/\/+$/, "");
 const TOKEN = process.env.FINN_API_TOKEN ?? "";
+const A2A_TOKEN = process.env.FINN_A2A_TOKEN ?? "";
 const BYPASS = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 
 if (!BASE_URL) {
@@ -99,13 +101,17 @@ for (const agent of ["spotify", "waze"]) {
 
 // --- Auth rejection ----------------------------------------------------------
 for (const path of ["/api/orchestrator", "/api/agents/spotify", "/api/agents/waze"]) {
-  await check(`POST ${path} without token → 401`, async () => {
+  const isA2A = path.startsWith("/api/agents/");
+  // A2A is off (503) on a server without a valid FINN_A2A_TOKEN; that is also a correct rejection.
+  const ok = (status) => status === 401 || (isA2A && status === 503);
+  const hint = isA2A ? "expected 401, or 503 if A2A is off (FINN_A2A_TOKEN unset/invalid on the server)" : "expected 401 (503 = server auth misconfigured)";
+  await check(`POST ${path} without token → ${isA2A ? "401 or 503 (A2A off)" : "401"}`, async () => {
     const res = await http("POST", path, { body: { transcript: "pausa" } });
-    assert(res.status === 401, `HTTP ${res.status} (503 = FINN_API_TOKEN not set on the server)`);
+    assert(ok(res.status), `HTTP ${res.status}; ${hint}`);
   });
-  await check(`POST ${path} with a wrong token → 401`, async () => {
+  await check(`POST ${path} with a wrong token → ${isA2A ? "401 or 503 (A2A off)" : "401"}`, async () => {
     const res = await http("POST", path, { token: "definitely-wrong", body: { transcript: "pausa" } });
-    assert(res.status === 401, `HTTP ${res.status}`);
+    assert(ok(res.status), `HTTP ${res.status}; ${hint}`);
   });
 }
 
@@ -126,12 +132,6 @@ if (!TOKEN) {
     return `"${res.json.speech}"`;
   });
 
-  await check("POST /api/agents/spotify unknown method → JSON-RPC -32601", async () => {
-    const res = await http("POST", "/api/agents/spotify", { token: TOKEN, body: messageSend("oi", "tasks/get") });
-    assert(res.status === 200, `HTTP ${res.status}`);
-    assert(res.json?.jsonrpc === "2.0" && res.json?.error?.code === -32601, `got ${res.text.slice(0, 200)}`);
-  });
-
   if (process.env.SMOKE_SKIP_LLM === "1") {
     results.push("  - SMOKE_SKIP_LLM=1: skipping the Neuralake round-trip");
   } else {
@@ -149,6 +149,16 @@ if (!TOKEN) {
       return `${ms}ms, "${res.json.speech}"${ms > 4000 ? " ⚠ slow for a driver" : ""}`;
     });
   }
+}
+
+if (!A2A_TOKEN) {
+  results.push("  - FINN_A2A_TOKEN not set: skipping authenticated A2A checks (FINN_API_TOKEN does not open /api/agents/*)");
+} else {
+  await check("POST /api/agents/spotify unknown method → JSON-RPC -32601", async () => {
+    const res = await http("POST", "/api/agents/spotify", { token: A2A_TOKEN, body: messageSend("oi", "tasks/get") });
+    assert(res.status === 200, `HTTP ${res.status}${res.status === 503 ? " (A2A off: FINN_A2A_TOKEN unset/invalid/equal to FINN_API_TOKEN on the server)" : ""}`);
+    assert(res.json?.jsonrpc === "2.0" && res.json?.error?.code === -32601, `got ${res.text.slice(0, 200)}`);
+  });
 }
 
 console.log(`Finn smoke @ ${BASE_URL}\n${results.join("\n")}`);

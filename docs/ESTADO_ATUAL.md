@@ -63,7 +63,7 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 9. `@upstash/redis` fixado em 1.40.0 sem `npm audit` nem checagem de procedência. Fazer antes do beta.
 10. Rotas devem tratar `DriverStoreUnavailableError` como negação com erro falável e sem logar o erro (entrega 2).
 11. Limite global de resgate de convite não existe (só por IP); tokens de 90 dias sem vínculo de ambiente (B3, em fila).
-13. ~~`/api/agents/*` aceita `FINN_API_TOKEN`~~ resolvido pela decisão A2 de 2026-10-27 (branch `feat/a2a-own-token`, em implementação).
+13. ~~`/api/agents/*` aceita `FINN_API_TOKEN`~~ resolvido pela decisão A2 de 2026-10-27 (branch `feat/a2a-own-token`): implementado; qa e security-review concluídos; correções aplicadas (558 testes); aguardando push e PR #4 (autorização do dono).
 14. Todo POST em `/api/session` gasta ao menos 1 comando Redis mesmo após rate limit e não há limite global: risco de esgotar a cota do plano Free sem autenticação (A3). Falta regra de rate limit no firewall da Vercel e alerta de uso no Upstash (ação do dono).
 15. Resgate de convite não é idempotente com resposta perdida (qa N4, security B4): retry cria motorista órfão ou 401. Decisão de produto pendente.
 17. `extractBearer` rejeita o esquema `bearer` em minúsculo (RFC 7235 diz que não diferencia maiúsculas); comportamento anterior, afeta orchestrator e A2A. Baixa prioridade, decidir antes de haver clientes externos.

@@ -23,7 +23,7 @@ Os agentes também são expostos via A2A (JSON-RPC `message/send`) para chamadas
 | Rota | O quê |
 | --- | --- |
 | `POST /api/orchestrator` | Entrada do PWA (`OrchestratorRequest` → `OrchestratorResponse`) |
-| `POST /api/agents/{spotify,waze}` | Endpoint de task A2A |
+| `POST /api/agents/{spotify,waze}` | Endpoint de task A2A (exige `Authorization: Bearer <FINN_A2A_TOKEN>`; desligado sem a variável válida) |
 | `POST /api/realtime/transcribe` | Transcrição de voz (Groq `whisper-large-v3-turbo` ou OpenAI `gpt-4o-mini-transcribe`) |
 | `POST /api/realtime/tts` | Síntese de voz HD opcional (`gpt-4o-mini-tts`) |
 | `POST /api/realtime/session` | Troca SDP do WebRTC com o GPT-Live-1 (desativado por padrão; exige `ENABLE_GPT_LIVE=1`) |
@@ -59,7 +59,7 @@ Regras para cada agente:
 
 ## Autenticação
 
-`/api/orchestrator`, `/api/agents/*` (POST) e `/api/realtime/*` exigem `Authorization: Bearer <FINN_API_TOKEN>` via `authorize()` de `src/lib/auth.ts` (fail-closed se a env não existir). Agent Cards e o callback OAuth do Spotify são públicos. O PWA pede o token uma vez e guarda em `localStorage`.
+`/api/orchestrator` e `/api/realtime/*` exigem sessão de motorista via `authorizeDriver()` de `src/lib/auth.ts` (token de sessão assinado; o token legado `FINN_API_TOKEN` só é aceito com `FINN_LEGACY_TOKEN_ENABLED=1`). `/api/agents/*` (POST, A2A) usa `authorizeA2A()` e exige `Authorization: Bearer <FINN_A2A_TOKEN>`: segredo próprio, 64 hex, diferente de `FINN_API_TOKEN`. Sem a variável válida o endpoint fica desligado (503); token ausente ou errado dá 401. `FINN_API_TOKEN` não abre o A2A. Agent Cards (`GET .../card` e `/agents/{spotify,waze}/.well-known/agent.json`) e o callback OAuth do Spotify são públicos. O PWA pede o token uma vez e guarda em `localStorage`.
 
 ## Continuação (`input-required`)
 

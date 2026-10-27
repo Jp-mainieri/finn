@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as orchestratorPOST } from "@/app/api/orchestrator/route";
 import { handleA2ARequest } from "@/lib/a2a-server";
-import { A2A_RATE_LIMIT, authorizeA2A, guardA2A, resetA2ADisabledLogForTests } from "@/lib/auth";
+import { A2A_RATE_LIMIT, authorizeA2A, guardA2A, LEGACY_OWNER_DRIVER_ID, resetA2ADisabledLogForTests } from "@/lib/auth";
 import { TEST_OWNER_ID } from "../helpers/owner";
 import type { Agent, AgentTaskInput } from "@/lib/contracts/a2a";
 import { getDriverStore, keyPrefix, MemoryDriverStore, signSessionToken } from "@/lib/driver";
@@ -208,8 +208,8 @@ describe(" e2e through the real route + real auth (non-owner B with a real sessi
     expect((await post({ transcript: "toca rock" }, b.token)).status).toBe(401);
   });
 
-  it("a validly signed token whose sub is the owner id has no store record: 401 (owner id cannot be minted)", async () => {
-    const forged = signSessionToken({ driverId: TEST_OWNER_ID, tokenVersion: 1 }, SESSION_SECRET);
+  it("a validly signed token whose sub is the provisional legacy id has no store record: 401 (the legacy id cannot be minted)", async () => {
+    const forged = signSessionToken({ driverId: LEGACY_OWNER_DRIVER_ID, tokenVersion: 1 }, SESSION_SECRET);
     expect((await post({ transcript: "toca rock" }, forged)).status).toBe(401);
   });
 });

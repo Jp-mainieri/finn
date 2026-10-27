@@ -121,6 +121,18 @@ function defaultCreateStore(env, vars) {
 
 const SAFE_MESSAGE = /^(Invalid (label|maxUses|expiresAt|invite pepper|key prefix)|Invite pepper must differ|Missing required environment variable: [A-Z0-9_]+$)/;
 
+/** Same reading as the server (FINN_OWNER_DRIVER_ID, ends trimmed, exact comparison afterwards); null when absent or invalid. */
+function ownerIdFrom(vars) {
+  const v = vars.FINN_OWNER_DRIVER_ID?.trim();
+  return v && isValidDriverId(v) && v !== "drv_legacy_owner_000000000" ? v : null;
+}
+
+const OWNER_EFFECT = {
+  "driver:revoke": "REVOGAR o dono derruba as sessões do carro e faz o token legado e o A2A falharem; o Spotify e os endereços do servidor deixam de funcionar para o carro.",
+  "driver:purge": "APAGAR dados do dono apaga os endereços ditados e o blob de Spotify residual; o Spotify do carro (SPOTIFY_REFRESH_TOKEN) continua.",
+  "driver:rotate": "ROTACIONAR o dono invalida as sessões atuais dele (o app do carro pede novo convite); o token legado e o A2A não são afetados.",
+};
+
 function when(ms) {
   return new Date(ms).toISOString();
 }
@@ -192,7 +204,9 @@ export async function run(argv, deps = {}) {
       const { drivers, skipped } = await store.listDriversDetailed();
       if (skipped > 0) err(`Aviso: ${skipped} entrada(s) do índice foram ignoradas (id inválido, registro ausente ou corrompido).`);
       if (drivers.length === 0) out("Nenhum motorista.");
-      for (const d of drivers) out(`${d.driverId}\t${d.label}\t${d.status}\t${when(d.createdAt)}`);
+      const ownerId = ownerIdFrom(vars);
+      if (!ownerId) err("Aviso: FINN_OWNER_DRIVER_ID não definida neste ambiente (ou inválida); nenhuma linha é marcada como dono.");
+      for (const d of drivers) out(`${d.driverId}\t${d.label}\t${d.status}\t${when(d.createdAt)}${d.driverId === ownerId ? "\t(dono)" : ""}`);
       return 0;
     }
 
@@ -205,6 +219,8 @@ export async function run(argv, deps = {}) {
       return 1;
     }
     out(`Alvo: "${driver.label}" (${driver.driverId}), status ${driver.status}, criado em ${when(driver.createdAt)}`);
+    const targetIsOwner = driver.driverId === ownerIdFrom(vars);
+    if (targetIsOwner) err(`ATENÇÃO: este motorista é o DONO (FINN_OWNER_DRIVER_ID). ${OWNER_EFFECT[command]}`);
     if (command === "driver:rotate" && driver.status !== "active") {
       err("Este motorista já está revogado: rotacionar sessões não tem efeito. Nada foi alterado.");
       return 1;
@@ -216,11 +232,12 @@ export async function run(argv, deps = {}) {
       return 0;
     }
     const verb =
-      command === "driver:revoke"
+      (targetIsOwner ? "[DONO] " : "") +
+      (command === "driver:revoke"
         ? "REVOGAR este motorista (o token dele deixa de valer e o token do Spotify guardado é apagado)"
         : command === "driver:purge"
           ? "APAGAR o token do Spotify e os endereços salvos deste motorista (ele terá de conectar o Spotify de novo)"
-          : "ROTACIONAR as sessões deste motorista (todos os tokens antigos deixam de valer)";
+          : "ROTACIONAR as sessões deste motorista (todos os tokens antigos deixam de valer)");
     if (!flags.yes && !isTTY) {
       err("Recusado: sem terminal interativo é preciso passar --yes para confirmar. Nada foi alterado.");
       return 1;

@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
-import { TEST_OWNER_ID } from "../helpers/owner";
+import { TEST_OWNER_ID, registerTestOwner } from "../helpers/owner";
 import { DriverStoreUnavailableError, MemoryDriverStore, setDriverStoreForTests, signSessionToken } from "@/lib/driver";
 import { evictSpotifyAccessToken, getAccessToken, resetSpotifyTokenCache } from "@/lib/spotify/auth";
 import { decryptToken, encryptToken } from "@/lib/spotify/token-crypto";
@@ -61,7 +61,7 @@ beforeEach(() => {
   profiles = new Map();
   nextProfile = undefined;
   meFails = false;
-  store = new MemoryDriverStore("finn:development:", () => Date.now());
+  store = registerTestOwner(new MemoryDriverStore("finn:development:", () => Date.now()));
   setDriverStoreForTests(store);
   vi.stubEnv("FINN_SESSION_SECRET", SESSION_SECRET);
   vi.stubEnv("FINN_TOKEN_ENC_KEY", TEST_ENC_KEY);
@@ -720,7 +720,7 @@ describe("QA login (dev flow of the owner)", () => {
     expect(cookie.toLowerCase()).toContain("samesite=lax");
     expect(cookie).toContain("Path=/api/spotify");
     expect(res.headers.get("cache-control")).toBe("no-store");
-    expect(store.allKeys()).toEqual([]);
+    expect(store.allKeys().filter((k) => !k.includes(":driver:"))).toEqual([]); // (the registered test owner is not state)
   });
 
   it("development: the dev callback needs the cookie to equal the state; a mismatching cookie falls to the normal path and shows nothing", async () => {

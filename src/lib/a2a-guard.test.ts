@@ -15,8 +15,7 @@ import {
   type DriverStore,
 } from "./driver";
 import { RATELIMIT_SCRIPT } from "./driver/upstash-store";
-import { TEST_OWNER_ID } from "../../tests/helpers/owner";
-void TEST_OWNER_ID;
+import { registerTestOwner } from "../../tests/helpers/owner";
 
 const A2A = "9c1e47d2b86a30f5e7d4c2a91b68f03e5d7a24c9e1b0836f4a5d2c7e91f0b3a8";
 const NEXT = "5d2b8f1a7c3e904d6b1a8e5f2c7d03a94b6e1f8c5a2d7039e4b1c6f8a5d20e73";
@@ -26,7 +25,7 @@ const API = "x-api-token-0123456789abcdefghijklmnopqrstuv";
 const T0 = 1_800_000_000_000;
 function setup() {
   const clock = { t: T0 };
-  const store = new MemoryDriverStore(keyPrefix("test"), () => clock.t);
+  const store = registerTestOwner(new MemoryDriverStore(keyPrefix("test"), () => clock.t));
   return { clock, store };
 }
 const req = (auth?: string, ip?: string, extra: Record<string, string> = {}) =>
@@ -101,7 +100,8 @@ describe("guardA2A failure rate limit", () => {
     const { store } = setup();
     await guardA2A(req(`Bearer ${WRONG}`, "1.2.3.4"), { store });
     await guardA2A(req(`Bearer ${WRONG}`, "2001:db8:1:2:3:4:5:6"), { store });
-    expect(store.allKeys().sort()).toEqual([
+    // (the owner's own driver record, registered by the test, is not a counter)
+    expect(store.allKeys().filter((k) => !k.includes(":driver:")).sort()).toEqual([
       "finn:test:ratelimit:a2a:1.2.3.4",
       "finn:test:ratelimit:a2a:v6-2001-db8-1-2",
     ]);

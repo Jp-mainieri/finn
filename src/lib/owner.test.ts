@@ -4,7 +4,7 @@
  * Contract: docs/contratos/pwa-convite-e-dono.md. No network, no real Redis.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TEST_OWNER_ID } from "../../tests/helpers/owner";
+import { TEST_OWNER_ID, registerTestOwner } from "../../tests/helpers/owner";
 import {
   authorizeA2A,
   authorizeDriver,
@@ -17,7 +17,7 @@ import {
 } from "./auth";
 import { handleA2ARequest } from "./a2a-server";
 import type { Agent, AgentTaskInput } from "./contracts/a2a";
-import { MemoryDriverStore, keyPrefix, setDriverStoreForTests } from "./driver";
+import { DriverStoreUnavailableError, MemoryDriverStore, keyPrefix, setDriverStoreForTests } from "./driver";
 import { getAccessToken, getOwnerSpotifyUserId, resetSpotifyTokenCache } from "./spotify/auth";
 import { handleConnect, handleConnectionStatus, handleDisconnect } from "./spotify/connect";
 import { createFakeSpotify, stubSpotifyEnv, TEST_ENC_KEY, TOKEN_URL } from "./spotify/testing";
@@ -67,7 +67,7 @@ describe("getOwnerDriverId / isOwner", () => {
   });
 
   it("an invalid variable counts as absent (legacy if the flag is on, nobody otherwise) and logs one value-free line per process", () => {
-    const bad = ["drv_short", `${TEST_OWNER_ID} `, ` ${TEST_OWNER_ID}`, TEST_OWNER_ID.toUpperCase(), "drv_" + "A".repeat(23), "drv_" + "A".repeat(21) + ":", "x"];
+    const bad = ["drv_short", `"${TEST_OWNER_ID}"`, `${TEST_OWNER_ID} x`, `drv_${"A".repeat(10)} ${"A".repeat(11)}`, TEST_OWNER_ID.toUpperCase(), "drv_" + "A".repeat(23), "drv_" + "A".repeat(21) + ":", "x", LEGACY_OWNER_DRIVER_ID];
     for (const value of bad) {
       expect(getOwnerDriverId({ FINN_OWNER_DRIVER_ID: value })).toBeUndefined();
       expect(getOwnerDriverId({ FINN_OWNER_DRIVER_ID: value, FINN_LEGACY_TOKEN_ENABLED: "1" })).toBe(LEGACY_OWNER_DRIVER_ID);
@@ -85,7 +85,7 @@ describe("getOwnerDriverId / isOwner", () => {
   it("isOwner compares the exact id: no trim, no case folding, no prefix; a guest is never the owner", () => {
     const env = { FINN_OWNER_DRIVER_ID: TEST_OWNER_ID };
     expect(isOwner(TEST_OWNER_ID, env)).toBe(true);
-    for (const id of [` ${TEST_OWNER_ID}`, `${TEST_OWNER_ID} `, TEST_OWNER_ID.toLowerCase(), TEST_OWNER_ID.toUpperCase(), TEST_OWNER_ID.slice(0, -1), GUEST, OTHER_VALID, "", LEGACY_OWNER_DRIVER_ID]) {
+    for (const id of [` ${TEST_OWNER_ID}`, `${TEST_OWNER_ID} `, `${TEST_OWNER_ID}\n`, TEST_OWNER_ID.toLowerCase(), TEST_OWNER_ID.toUpperCase(), TEST_OWNER_ID.slice(0, -1), GUEST, OTHER_VALID, "", LEGACY_OWNER_DRIVER_ID]) {
       expect(isOwner(id, env)).toBe(false);
     }
   });
@@ -114,7 +114,7 @@ describe("legacy token (authorizeDriver)", () => {
     vi.stubEnv("FINN_API_TOKEN", API);
     vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", "1");
     vi.stubEnv("FINN_OWNER_DRIVER_ID", TEST_OWNER_ID);
-    expect(await authorizeDriver(req())).toEqual({ driverId: TEST_OWNER_ID });
+    expect(await authorizeDriver(req(), { store: registerTestOwner(new MemoryDriverStore(keyPrefix("test"))) })).toEqual({ driverId: TEST_OWNER_ID });
   });
 
   it("flag on, variable absent or invalid: the provisional legacy id", async () => {
@@ -143,7 +143,7 @@ describe("only the owner reaches SPOTIFY_REFRESH_TOKEN and WAZE_SAVED_ADDRESSES"
     stubSpotifyEnv(vi.stubEnv); // SPOTIFY_REFRESH_TOKEN = "refresh-token"
     vi.stubEnv("FINN_TOKEN_ENC_KEY", TEST_ENC_KEY);
     vi.stubEnv("WAZE_SAVED_ADDRESSES", SEED);
-    store = new MemoryDriverStore(keyPrefix("test"));
+    store = registerTestOwner(new MemoryDriverStore(keyPrefix("test")));
     setDriverStoreForTests(store);
     fake = createFakeSpotify();
     vi.stubGlobal("fetch", vi.fn(fake.fetch));
@@ -231,7 +231,7 @@ describe("connect / connection routes follow the owner", () => {
   const del = (t: string) => new Request("https://finn.test/api/spotify/connection", { method: "DELETE", headers: bearer(t) });
 
   beforeEach(() => {
-    store = new MemoryDriverStore(keyPrefix("test"));
+    store = registerTestOwner(new MemoryDriverStore(keyPrefix("test")));
     setDriverStoreForTests(store);
     vi.stubEnv("FINN_API_TOKEN", API);
     vi.stubEnv("FINN_SESSION_SECRET", secret);
@@ -290,7 +290,7 @@ describe("A2A runs as the owner; without one it is off (503)", () => {
     vi.stubEnv("FINN_OWNER_DRIVER_ID", undefined);
     vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", undefined);
     expect(authorizeA2A(req())?.status).toBe(503);
-    const store = new MemoryDriverStore(keyPrefix("test"));
+    const store = registerTestOwner(new MemoryDriverStore(keyPrefix("test")));
     const peek = vi.spyOn(store, "peekRateLimit");
     const res = (await guardA2A(req(), { store }))!;
     expect(res.status).toBe(503);
@@ -315,6 +315,111 @@ describe("A2A runs as the owner; without one it is off (503)", () => {
     vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", "1");
     await handleA2ARequest(agent, body("oi"));
     expect(seen[1].driverId).toBe(LEGACY_OWNER_DRIVER_ID);
+  });
+});
+
+describe("round 2: variable with stray whitespace (qa N1) and the legacy id as a value (qa N4)", () => {
+  it("spaces, \\n and \\r at the ends are trimmed: the variable is the id (also as flag-less owner); the comparison stays exact", () => {
+    for (const v of [` ${TEST_OWNER_ID}`, `${TEST_OWNER_ID}\n`, `${TEST_OWNER_ID}\r\n`, `  ${TEST_OWNER_ID} \t\n`]) {
+      expect(getOwnerDriverId({ FINN_OWNER_DRIVER_ID: v })).toBe(TEST_OWNER_ID);
+      expect(isOwner(TEST_OWNER_ID, { FINN_OWNER_DRIVER_ID: v })).toBe(true);
+      expect(isOwner(`${TEST_OWNER_ID} `, { FINN_OWNER_DRIVER_ID: v })).toBe(false);
+    }
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("quotes and inner spaces stay invalid; blank (only whitespace) counts as absent without a log", () => {
+    for (const v of [`"${TEST_OWNER_ID}"`, `'${TEST_OWNER_ID}'`, `drv_${"A".repeat(10)} ${"A".repeat(11)}`]) {
+      expect(getOwnerDriverId({ FINN_OWNER_DRIVER_ID: v })).toBeUndefined();
+    }
+    expect(console.error).toHaveBeenCalledTimes(1);
+    resetOwnerLogForTests();
+    vi.mocked(console.error).mockClear();
+    expect(getOwnerDriverId({ FINN_OWNER_DRIVER_ID: " \n" })).toBeUndefined();
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("the legacy id as the VALUE of the variable is invalid even with the flag off (never makes the legacy id an owner)", () => {
+    expect(getOwnerDriverId({ FINN_OWNER_DRIVER_ID: LEGACY_OWNER_DRIVER_ID })).toBeUndefined();
+    expect(isOwner(LEGACY_OWNER_DRIVER_ID, { FINN_OWNER_DRIVER_ID: LEGACY_OWNER_DRIVER_ID })).toBe(false);
+    expect(console.error).toHaveBeenCalledTimes(1);
+    expect(getOwnerDriverId({ FINN_OWNER_DRIVER_ID: LEGACY_OWNER_DRIVER_ID, FINN_LEGACY_TOKEN_ENABLED: "1" })).toBe(LEGACY_OWNER_DRIVER_ID);
+  });
+});
+
+describe("round 2: a real owner must be registered and active for the legacy token and A2A (sec M1 / qa N3)", () => {
+  const legacyReq = () => new Request("http://x/api/orchestrator", { headers: { authorization: `Bearer ${API}` } });
+  const a2aReq = () => new Request("http://x/api/agents/waze", { method: "POST", headers: { authorization: `Bearer ${A2A}`, "x-vercel-forwarded-for": "9.9.9.9" } });
+  const fresh = (status: "active" | "revoked" | "missing") => {
+    const store = new MemoryDriverStore(keyPrefix("test"));
+    if (status !== "missing") registerTestOwner(store, status);
+    return store;
+  };
+  beforeEach(() => {
+    vi.stubEnv("FINN_API_TOKEN", API);
+    vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", "1");
+    vi.stubEnv("FINN_OWNER_DRIVER_ID", TEST_OWNER_ID);
+    vi.stubEnv("FINN_A2A_TOKEN", A2A);
+  });
+
+  it("active owner: legacy token and A2A pass", async () => {
+    const store = fresh("active");
+    expect(await authorizeDriver(legacyReq(), { store })).toEqual({ driverId: TEST_OWNER_ID });
+    expect(await guardA2A(a2aReq(), { store })).toBeNull();
+  });
+
+  it.each(["revoked", "missing"] as const)("%s owner: legacy token is 401 and A2A is 503 'A2A endpoint disabled', with no failure counted", async (status) => {
+    const store = fresh(status);
+    const legacy = (await authorizeDriver(legacyReq(), { store })) as Response;
+    expect(legacy.status).toBe(401);
+    const a2a = (await guardA2A(a2aReq(), { store }))!;
+    expect(a2a.status).toBe(503);
+    expect(await a2a.json()).toEqual({ error: "A2A endpoint disabled" });
+    expect(await store.peekRateLimit("ratelimit:a2a:9.9.9.9")).toBe(0);
+  });
+
+  it("revoking the owner AFTER it worked cuts both at once (driver:revoke)", async () => {
+    const store = fresh("active");
+    expect(await guardA2A(a2aReq(), { store })).toBeNull();
+    await store.revokeDriver(TEST_OWNER_ID);
+    expect(((await authorizeDriver(legacyReq(), { store })) as Response).status).toBe(401);
+    expect((await guardA2A(a2aReq(), { store }))?.status).toBe(503);
+  });
+
+  it("rotating the owner's sessions does NOT cut the legacy token nor A2A (rotation is about sessions)", async () => {
+    const store = fresh("active");
+    await store.rotateSessions(TEST_OWNER_ID);
+    expect(await authorizeDriver(legacyReq(), { store })).toEqual({ driverId: TEST_OWNER_ID });
+    expect(await guardA2A(a2aReq(), { store })).toBeNull();
+  });
+
+  it("store down on the owner lookup: legacy answers the usual 503 unavailable, A2A is off (503); nothing leaks", async () => {
+    const store = fresh("active");
+    vi.spyOn(store, "getDriver").mockRejectedValue(new DriverStoreUnavailableError());
+    const legacy = (await authorizeDriver(legacyReq(), { store })) as Response;
+    expect(legacy.status).toBe(503);
+    expect(legacy.headers.get("retry-after")).toBe("5");
+    const a2a = (await guardA2A(a2aReq(), { store }))!;
+    expect(a2a.status).toBe(503);
+    expect(await a2a.json()).toEqual({ error: "A2A endpoint disabled" });
+  });
+
+  it("the provisional legacy owner has no record and needs none (nothing changes without the variable)", async () => {
+    vi.stubEnv("FINN_OWNER_DRIVER_ID", undefined);
+    const store = fresh("missing");
+    const spy = vi.spyOn(store, "getDriver");
+    expect(await authorizeDriver(legacyReq(), { store })).toEqual({ driverId: LEGACY_OWNER_DRIVER_ID });
+    expect(await guardA2A(a2aReq(), { store })).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("a wrong A2A secret still gets 401 and counts as a failure, without any owner lookup (limiter untouched)", async () => {
+    const store = fresh("revoked");
+    const spy = vi.spyOn(store, "getDriver");
+    const bad = new Request("http://x/api/agents/waze", { method: "POST", headers: { authorization: `Bearer ${"e1".repeat(32)}`, "x-vercel-forwarded-for": "9.9.9.9" } });
+    expect((await guardA2A(bad, { store }))?.status).toBe(401);
+    expect(await store.peekRateLimit("ratelimit:a2a:9.9.9.9")).toBe(1);
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 

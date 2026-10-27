@@ -1,6 +1,6 @@
 # Contrato — dono registrado e PWA com convite (etapa 1, entrega 5)
 
-Status: **rascunho, aguardando aprovação do dono** (2026-10-27). Base: [`identidade-e-perfil.md`](./identidade-e-perfil.md), [`isolamento-por-motorista.md`](./isolamento-por-motorista.md), [`custodia-token-spotify.md`](./custodia-token-spotify.md). Decisão do dono (A1, opção C, 2026-10-27): o dono vira um motorista de verdade (convite), `FINN_OWNER_DRIVER_ID` aponta para ele, o token legado é desligado.
+Status: **aprovado pelo dono em 2026-10-27** (com as 3 decisões embutidas). Base: [`identidade-e-perfil.md`](./identidade-e-perfil.md), [`isolamento-por-motorista.md`](./isolamento-por-motorista.md), [`custodia-token-spotify.md`](./custodia-token-spotify.md). Decisão do dono (A1, opção C, 2026-10-27): o dono vira um motorista de verdade (convite), `FINN_OWNER_DRIVER_ID` aponta para ele, o token legado é desligado.
 
 ## Objetivo
 
@@ -74,3 +74,4 @@ Amarração do callback ao navegador (depende do teste no iOS); rate limit por m
 ## Histórico de mudanças
 
 - 2026-10-27: rascunho, após a decisão A1 (opção C).
+- 2026-10-27: aprovado pelo dono, sem alterações.

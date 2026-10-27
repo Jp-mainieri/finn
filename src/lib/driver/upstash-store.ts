@@ -1,6 +1,11 @@
 import {
   DriverStoreUnavailableError,
+  OAUTH_STATE_TTL_SECONDS,
   assertPrefix,
+  assertSpotifyBlob,
+  generateOAuthState,
+  oauthStateHash,
+  parseOAuthStateRecord,
   isValidDriverId,
   keys,
   normalizeLabel,
@@ -24,6 +29,9 @@ export interface RedisLike {
   sadd(key: string, member: string): Promise<unknown>;
   smembers(key: string): Promise<unknown>;
   get(key: string): Promise<unknown>;
+  set(key: string, value: string, opts?: { ex: number }): Promise<unknown>;
+  del(...keys: string[]): Promise<unknown>;
+  getdel(key: string): Promise<unknown>;
   eval(script: string, keys: string[], args: string[]): Promise<unknown>;
 }
 
@@ -183,6 +191,57 @@ export class UpstashDriverStore implements DriverStore {
     if (!isValidDriverId(driverId)) return;
     const r = await this.call(() => this.redis.eval(REVOKE_SCRIPT, [keys.driver(this.prefix, driverId)], ["status", "revoked"]));
     if (r !== 0 && r !== 1) throw new DriverStoreUnavailableError();
+    // Revoking also drops the stored Spotify token (the driver can never use it again).
+    await this.deleteSpotifyBlob(driverId);
+  }
+
+  async getSpotifyBlob(driverId: string): Promise<string | null> {
+    if (!isValidDriverId(driverId)) return null;
+    const raw = await this.call(() => this.redis.get(keys.spotifyToken(this.prefix, driverId)));
+    if (raw === null || raw === undefined) return null;
+    if (typeof raw !== "string") throw new DriverStoreUnavailableError();
+    return raw;
+  }
+
+  async setSpotifyBlob(driverId: string, blob: string): Promise<void> {
+    assertSpotifyBlob(blob);
+    const key = keys.spotifyToken(this.prefix, driverId); // validates the id, outside call()
+    const r = await this.call(() => this.redis.set(key, blob));
+    if (r !== "OK") throw new DriverStoreUnavailableError();
+  }
+
+  async deleteSpotifyBlob(driverId: string): Promise<void> {
+    if (!isValidDriverId(driverId)) return;
+    const r = await this.call(() => this.redis.del(keys.spotifyToken(this.prefix, driverId)));
+    if (typeof r !== "number") throw new DriverStoreUnavailableError();
+  }
+
+  async createOAuthState(driverId: string): Promise<string> {
+    if (!isValidDriverId(driverId)) throw new Error("Invalid driverId");
+    const state = generateOAuthState();
+    const key = keys.oauthState(this.prefix, oauthStateHash(state) as string);
+    const value = JSON.stringify({ driverId, createdAt: this.now() });
+    const r = await this.call(() => this.redis.set(key, value, { ex: OAUTH_STATE_TTL_SECONDS }));
+    if (r !== "OK") throw new DriverStoreUnavailableError();
+    return state;
+  }
+
+  async consumeOAuthState(state: string): Promise<string | null> {
+    const hash = oauthStateHash(state);
+    if (!hash) return null; // wrong shape: no Redis call
+    // GETDEL: read and delete in one atomic command; of N racing callers only one gets the value.
+    const raw = await this.call(() => this.redis.getdel(keys.oauthState(this.prefix, hash)));
+    if (raw === null || raw === undefined) return null;
+    if (typeof raw !== "string") throw new DriverStoreUnavailableError();
+    return parseOAuthStateRecord(raw, this.now());
+  }
+
+  async purgeDriverData(driverId: string): Promise<void> {
+    if (!isValidDriverId(driverId)) return;
+    const r = await this.call(() =>
+      this.redis.del(keys.spotifyToken(this.prefix, driverId), keys.driverAddr(this.prefix, driverId)),
+    );
+    if (typeof r !== "number") throw new DriverStoreUnavailableError();
   }
 
   async rotateSessions(driverId: string): Promise<void> {

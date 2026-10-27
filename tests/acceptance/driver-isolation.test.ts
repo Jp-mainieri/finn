@@ -10,6 +10,7 @@ import { handleA2ARequest } from "@/lib/a2a-server";
 import { A2A_RATE_LIMIT, authorizeA2A, guardA2A, LEGACY_OWNER_DRIVER_ID, resetA2ADisabledLogForTests } from "@/lib/auth";
 import type { Agent, AgentTaskInput } from "@/lib/contracts/a2a";
 import { getDriverStore, keyPrefix, MemoryDriverStore, signSessionToken } from "@/lib/driver";
+import { saveSpotifyRefreshToken } from "@/lib/spotify/token-vault";
 import { createNavigateTo } from "@/agents/waze/tools";
 import {
   getAddressBook,
@@ -27,6 +28,7 @@ vi.mock("@/lib/neuralake/client", async (importOriginal) => ({
 }));
 
 const SESSION_SECRET = "3f9a1c7e5b2d48806ae1f4c93d7b05e2a8c61f9d04b37e5a2c8d1f6039ab74ce";
+const TOKEN_ENC_KEY = "0123456789abcdef".repeat(4);
 const OWNER_ADDR = "Rua do Dono, 111";
 const B_ADDR = "Rua do Motorista B, 222";
 
@@ -64,7 +66,7 @@ describe(" e2e through the real route + real auth (non-owner B with a real sessi
   const h = useHarness({
     spotify: true,
     addressBook: true,
-    env: { WAZE_SAVED_ADDRESSES: JSON.stringify({ casa: OWNER_ADDR }), FINN_SESSION_SECRET: SESSION_SECRET },
+    env: { WAZE_SAVED_ADDRESSES: JSON.stringify({ casa: OWNER_ADDR }), FINN_SESSION_SECRET: SESSION_SECRET, FINN_TOKEN_ENC_KEY: TOKEN_ENC_KEY },
   });
 
   it("B without a Spotify token: 'Conecte seu Spotify', zero calls to Spotify (route -> auth -> orchestrator -> agent)", async () => {
@@ -78,16 +80,30 @@ describe(" e2e through the real route + real auth (non-owner B with a real sessi
     expect(h.spotify.spotifyCalls).toEqual([]);
   });
 
-  it("B with a bad own token (and the cookie too): server refresh token never appears in any token request", async () => {
-    const { token } = await newDriver("B");
+  it("B with a bad stored token: server refresh token never appears in any token request", async () => {
+    const { token, driver, store } = await newDriver("B");
+    await saveSpotifyRefreshToken(driver.driverId, "b-stored-bad", { store });
     llm.scripts.spotify = { turns: [call("play_playlist", { playlist_name: "Rock Nacional" }), say("Tocando.")] };
-    await post({ transcript: "toca rock nacional", driverContext: { spotifyRefreshToken: "b-bad" } }, token, {
-      cookie: "finn_spotify_rt=b-cookie-bad",
-    });
+    await post({ transcript: "toca rock nacional" }, token);
     const bodies = h.spotify.callsTo("token").map((c) => c.body ?? "");
     expect(bodies.length).toBeGreaterThan(0);
-    for (const b of bodies) expect(b).not.toContain(SPOTIFY_CREDS.refreshToken);
+    for (const b of bodies) {
+      expect(b).toContain("b-stored-bad");
+      expect(b).not.toContain(SPOTIFY_CREDS.refreshToken);
+    }
     expect(h.spotify.callsTo("play")).toEqual([]);
+  });
+
+  it("B with a token only in the body and in the cookie (never stored): it is ignored, zero calls to Spotify", async () => {
+    const { token } = await newDriver("B");
+    llm.scripts.spotify = { turns: [call("play_playlist", { playlist_name: "Rock Nacional" }), say("Tocando.")] };
+    const res = await (
+      await post({ transcript: "toca rock nacional", driverContext: { spotifyRefreshToken: "b-from-body" } }, token, {
+        cookie: "finn_spotify_rt=b-from-cookie; finn_spotify_token=b-from-cookie2",
+      })
+    ).json();
+    expect(res.speech).toMatch(/Conecte seu Spotify/);
+    expect(h.spotify.spotifyCalls).toEqual([]);
   });
 
   it("race: owner plays while B (no token) tries at the same time; B never gets the owner's access token", async () => {
@@ -158,11 +174,20 @@ describe(" e2e through the real route + real auth (non-owner B with a real sessi
     expect(JSON.stringify(res)).not.toContain("aparelho");
   });
 
-  it("owner with a custom device token that is invalid: no fallback to SPOTIFY_REFRESH_TOKEN", async () => {
+  it("owner with a device token in body and cookie: ignored, the server token is used", async () => {
     llm.scripts.spotify = { turns: [call("play_playlist", { playlist_name: "Rock Nacional" }), say("Tocando.")] };
-    const res = await (await post({ transcript: "toca rock nacional", driverContext: { spotifyRefreshToken: "owner-device-bad" } }, TEST_TOKEN)).json();
-    expect(res.results[0].status).toBe("failed");
-    for (const c of h.spotify.callsTo("token")) expect(c.body ?? "").not.toContain(SPOTIFY_CREDS.refreshToken);
+    const res = await (
+      await post({ transcript: "toca rock nacional", driverContext: { spotifyRefreshToken: "owner-device-bad" } }, TEST_TOKEN, {
+        cookie: "finn_spotify_rt=owner-cookie-bad",
+      })
+    ).json();
+    expect(res.results[0].status).toBe("completed");
+    const bodies = h.spotify.callsTo("token").map((c) => c.body ?? "");
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const b of bodies) {
+      expect(b).toContain(SPOTIFY_CREDS.refreshToken);
+      expect(b).not.toMatch(/owner-device-bad|owner-cookie-bad/);
+    }
   });
 
   it("owner without any token: server token still works (regression)", async () => {

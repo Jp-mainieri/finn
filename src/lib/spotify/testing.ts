@@ -79,3 +79,25 @@ export function stubSpotifyEnv(stubEnv: (name: string, value: string) => unknown
   stubEnv("SPOTIFY_CLIENT_SECRET", "client-secret");
   stubEnv("SPOTIFY_REFRESH_TOKEN", "refresh-token");
 }
+
+/** 64 hex, 16 distinct chars: accepted as FINN_TOKEN_ENC_KEY. */
+export const TEST_ENC_KEY = "0123456789abcdef".repeat(4);
+/** Another valid secret, different from TEST_ENC_KEY. */
+export const OTHER_TEST_KEY = "fedcba9876543210".repeat(4);
+
+/**
+ * Test-only: arms the token vault with TEST_ENC_KEY and an in-memory store (prefix finn:development:),
+ * installed as the process-wide store. Call `restore()` (setDriverStoreForTests(undefined)) in afterEach.
+ */
+export async function useTestTokenVault(stubEnv: (name: string, value: string) => unknown) {
+  const { MemoryDriverStore, setDriverStoreForTests } = await import("../driver");
+  stubEnv("FINN_TOKEN_ENC_KEY", TEST_ENC_KEY);
+  const store = new MemoryDriverStore("finn:development:");
+  setDriverStoreForTests(store);
+  const { saveSpotifyRefreshToken } = await import("./token-vault");
+  return {
+    store,
+    connect: (driverId: string, refreshToken: string) => saveSpotifyRefreshToken(driverId, refreshToken, { store }),
+    restore: () => setDriverStoreForTests(undefined),
+  };
+}

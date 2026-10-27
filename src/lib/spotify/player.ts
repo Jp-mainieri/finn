@@ -58,7 +58,7 @@ async function withDeviceFallback(
       device = pickDevice(res?.devices ?? []);
     } catch (lookupErr) {
       if (signal?.aborted) throw lookupErr;
-      console.warn("[spotify] device lookup failed; keeping the no-device error", lookupErr);
+      console.warn("[spotify] device lookup failed; keeping the no-device error");
     }
     if (!device?.id) throw err;
     await run(device.id);

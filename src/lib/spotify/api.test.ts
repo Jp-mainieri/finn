@@ -22,6 +22,7 @@ import {
   spotifyError,
   stubSpotifyEnv,
   TOKEN_URL,
+  useTestTokenVault,
   type FakeSpotifyOptions,
 } from "./testing";
 
@@ -234,37 +235,45 @@ describe("Spotify operations", () => {
     expect(calls).toEqual([expect.objectContaining({ method, url, body: null })]);
   });
 
-  describe("multi-user custom refresh token", () => {
-    it("requests token with custom refreshToken and caches it", async () => {
-      const fake = install();
-      const { getAccessToken } = await import("./auth");
+  describe("a connected driver uses their own stored refresh token", () => {
+    const B = { driverId: "drv_" + "B".repeat(22) };
 
-      const token1 = await getAccessToken({ ...OWNER, refreshToken: "custom-driver-token" });
-      expect(token1).toBeTypeOf("string");
+    it("requests the access token with the stored token and caches it per driverId", async () => {
+      const vault = await useTestTokenVault(vi.stubEnv);
+      try {
+        await vault.connect(B.driverId, "custom-driver-token");
+        const fake = install();
+        const { getAccessToken } = await import("./auth");
 
-      // Verify the POST to token endpoint used custom-driver-token
-      const tokenCalls = fake.find("POST", TOKEN_URL);
-      expect(tokenCalls).toHaveLength(1);
-      expect(tokenCalls[0].body).toContain("refresh_token=custom-driver-token");
+        const token1 = await getAccessToken(B);
+        expect(token1).toBeTypeOf("string");
+        const tokenCalls = fake.find("POST", TOKEN_URL);
+        expect(tokenCalls).toHaveLength(1);
+        expect(tokenCalls[0].body).toContain("refresh_token=custom-driver-token");
 
-      // Second call reuses cached token (no second network call)
-      const token2 = await getAccessToken({ ...OWNER, refreshToken: "custom-driver-token" });
-      expect(token2).toBe(token1);
-      expect(fake.find("POST", TOKEN_URL)).toHaveLength(1);
+        expect(await getAccessToken(B)).toBe(token1);
+        expect(fake.find("POST", TOKEN_URL)).toHaveLength(1);
 
-      // resetSpotifyTokenCache clears custom cache
-      resetSpotifyTokenCache();
-      const token3 = await getAccessToken({ ...OWNER, refreshToken: "custom-driver-token" });
-      expect(token3).toBeTypeOf("string");
-      expect(fake.find("POST", TOKEN_URL)).toHaveLength(2);
+        resetSpotifyTokenCache();
+        expect(await getAccessToken(B)).toBeTypeOf("string");
+        expect(fake.find("POST", TOKEN_URL)).toHaveLength(2);
+      } finally {
+        vault.restore();
+      }
     });
 
-    it("passes custom refreshToken down to spotifyRequest", async () => {
-      const fake = install();
-      await spotifyRequest("/me/player/pause", { method: "PUT", ...OWNER, refreshToken: "user-456-token" });
-      const tokenCalls = fake.find("POST", TOKEN_URL);
-      expect(tokenCalls).toHaveLength(1);
-      expect(tokenCalls[0].body).toContain("refresh_token=user-456-token");
+    it("spotifyRequest uses the stored token", async () => {
+      const vault = await useTestTokenVault(vi.stubEnv);
+      try {
+        await vault.connect(B.driverId, "user-456-token");
+        const fake = install();
+        await spotifyRequest("/me/player/pause", { method: "PUT", ...B });
+        const tokenCalls = fake.find("POST", TOKEN_URL);
+        expect(tokenCalls).toHaveLength(1);
+        expect(tokenCalls[0].body).toContain("refresh_token=user-456-token");
+      } finally {
+        vault.restore();
+      }
     });
   });
 });

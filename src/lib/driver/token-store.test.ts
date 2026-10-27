@@ -1,0 +1,234 @@
+import { createHash } from "node:crypto";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  DriverStoreUnavailableError,
+  MemoryDriverStore,
+  OAUTH_STATE_TTL_SECONDS,
+  UpstashDriverStore,
+  createRedisClient,
+  keyPrefix,
+  type DriverStore,
+} from "./index";
+import { encryptToken } from "../spotify/token-crypto";
+import { TEST_ENC_KEY } from "../spotify/testing";
+
+const A = "drv_" + "A".repeat(22);
+const B = "drv_" + "B".repeat(22);
+const P = keyPrefix("preview");
+const blobFor = (id: string) => encryptToken("rt-" + id, Buffer.from(TEST_ENC_KEY, "hex"), `${P}spotify:${id}`);
+
+afterEach(() => vi.unstubAllGlobals());
+
+/** Fake Upstash REST (real SDK on top): strings with TTL (virtual clock), GETDEL, DEL, SET EX, EVAL for revoke. */
+function fakeUpstash(clock: { t: number }) {
+  const kv = new Map<string, { v: string; exp?: number }>();
+  const hashes = new Map<string, Record<string, string>>();
+  const commands: string[][] = [];
+  const live = (k: string) => {
+    const e = kv.get(k);
+    if (e && e.exp !== undefined && e.exp <= clock.t) kv.delete(k);
+    return kv.get(k);
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_u: unknown, init: RequestInit) => {
+      const cmd = (JSON.parse(init.body as string) as unknown[]).map(String); // the SDK sends `ex` as a number
+      commands.push(cmd);
+      const [op, ...r] = cmd;
+      const reply = (result: unknown) => new Response(JSON.stringify({ result }), { status: 200 });
+      switch (op.toLowerCase()) {
+        case "set": {
+          const exI = r.findIndex((x, i) => i >= 2 && x.toUpperCase() === "EX");
+          kv.set(r[0], { v: r[1], exp: exI > 0 ? clock.t + Number(r[exI + 1]) * 1000 : undefined });
+          return reply("OK");
+        }
+        case "sadd":
+          return reply(1);
+        case "hset": {
+          const h = hashes.get(r[0]) ?? {};
+          for (let i = 1; i < r.length; i += 2) h[r[i]] = r[i + 1];
+          hashes.set(r[0], h);
+          return reply(1);
+        }
+        case "get":
+          return reply(live(r[0])?.v ?? null);
+        case "getdel": {
+          const e = live(r[0]);
+          kv.delete(r[0]);
+          return reply(e?.v ?? null);
+        }
+        case "del": {
+          let n = 0;
+          for (const k of r) if (kv.delete(k)) n++;
+          return reply(n);
+        }
+        case "eval": {
+          const n = Number(r[1]);
+          const h = hashes.get(r[2]);
+          if (n === 1 && h) h[r[2 + n]] = r[3 + n];
+          return reply(h ? 1 : 0);
+        }
+      }
+      return new Response(JSON.stringify({ error: "unsupported" }), { status: 400 });
+    }),
+  );
+  return { kv, hashes, commands };
+}
+
+type Setup = { name: string; make: () => { store: DriverStore; clock: { t: number }; has: (key: string) => boolean; commands?: string[][] } };
+const setups: Setup[] = [
+  {
+    name: "memory",
+    make: () => {
+      const clock = { t: 1_000_000 };
+      const store = new MemoryDriverStore(P, () => clock.t);
+      return { store, clock, has: (k) => store.allKeys().includes(k) };
+    },
+  },
+  {
+    name: "upstash (real SDK, fake REST)",
+    make: () => {
+      const clock = { t: 1_000_000 };
+      const f = fakeUpstash(clock);
+      const store = new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok"), P, () => clock.t);
+      return { store, clock, has: (k) => f.kv.has(k), commands: f.commands };
+    },
+  },
+];
+
+describe.each(setups)("oauth state and token blobs: $name", ({ make }) => {
+  it("state: create then consume gives the driverId of the server record; second use fails", async () => {
+    const { store } = make();
+    const state = await store.createOAuthState(A);
+    expect(state).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(await store.consumeOAuthState(state)).toBe(A);
+    expect(await store.consumeOAuthState(state)).toBeNull();
+  });
+
+  it("state: unknown, malformed and wrong-length values fail (malformed ones never reach Redis)", async () => {
+    const { store, commands } = make();
+    expect(await store.consumeOAuthState("A".repeat(43))).toBeNull();
+    const before = commands?.length ?? 0;
+    for (const bad of ["", "x", "A".repeat(42), "A".repeat(44), "A".repeat(42) + "=", "A".repeat(42) + ".", A, null as unknown as string]) {
+      expect(await store.consumeOAuthState(bad)).toBeNull();
+    }
+    if (commands) expect(commands.length).toBe(before);
+  });
+
+  it("state: expires after 600 s", async () => {
+    const { store, clock } = make();
+    const s1 = await store.createOAuthState(A);
+    clock.t += (OAUTH_STATE_TTL_SECONDS - 1) * 1000;
+    expect(await store.consumeOAuthState(s1)).toBe(A);
+    const s2 = await store.createOAuthState(A);
+    clock.t += (OAUTH_STATE_TTL_SECONDS + 1) * 1000;
+    expect(await store.consumeOAuthState(s2)).toBeNull();
+  });
+
+  it("state: atomic single use under a race, one winner out of many", async () => {
+    const { store } = make();
+    const state = await store.createOAuthState(A);
+    const results = await Promise.all(Array.from({ length: 12 }, () => store.consumeOAuthState(state)));
+    expect(results.filter((r) => r === A)).toHaveLength(1);
+    expect(results.filter((r) => r === null)).toHaveLength(11);
+  });
+
+  it("state: each state is bound to its own driver", async () => {
+    const { store } = make();
+    const [sa, sb] = [await store.createOAuthState(A), await store.createOAuthState(B)];
+    expect(sa).not.toBe(sb);
+    expect(await store.consumeOAuthState(sb)).toBe(B);
+    expect(await store.consumeOAuthState(sa)).toBe(A);
+  });
+
+  it("blob: set/get/delete per driver, isolated, idempotent delete", async () => {
+    const { store } = make();
+    await store.setSpotifyBlob(A, blobFor(A));
+    expect(await store.getSpotifyBlob(B)).toBeNull();
+    expect(await store.getSpotifyBlob(A)).toMatch(/^v1\./);
+    await store.setSpotifyBlob(B, blobFor(B));
+    await store.deleteSpotifyBlob(A);
+    await store.deleteSpotifyBlob(A);
+    expect(await store.getSpotifyBlob(A)).toBeNull();
+    expect(await store.getSpotifyBlob(B)).not.toBeNull();
+  });
+
+  it("revokeDriver deletes the driver's blob and only theirs", async () => {
+    const { store } = make();
+    const a = await store.createDriver({ label: "A" });
+    const b = await store.createDriver({ label: "B" });
+    await store.setSpotifyBlob(a.driverId, blobFor(a.driverId));
+    await store.setSpotifyBlob(b.driverId, blobFor(b.driverId));
+    await store.revokeDriver(a.driverId);
+    expect(await store.getSpotifyBlob(a.driverId)).toBeNull();
+    expect(await store.getSpotifyBlob(b.driverId)).not.toBeNull();
+  });
+
+  it("purgeDriverData removes the blob, leaves other drivers alone, is idempotent", async () => {
+    const { store } = make();
+    await store.setSpotifyBlob(A, blobFor(A));
+    await store.setSpotifyBlob(B, blobFor(B));
+    await store.purgeDriverData(A);
+    await store.purgeDriverData(A);
+    await store.purgeDriverData("not-an-id");
+    expect(await store.getSpotifyBlob(A)).toBeNull();
+    expect(await store.getSpotifyBlob(B)).not.toBeNull();
+  });
+});
+
+describe("upstash specifics (wire level)", () => {
+  it("state is stored under sha256(state) with TTL 600, consumed with GETDEL, and the raw state is never sent to Redis", async () => {
+    const clock = { t: 1_000_000 };
+    const f = fakeUpstash(clock);
+    const store = new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok"), P, () => clock.t);
+    const state = await store.createOAuthState(A);
+    const key = `${P}oauth-state:${createHash("sha256").update(state).digest("hex")}`;
+    const set = f.commands.find((c) => c[0].toLowerCase() === "set");
+    expect(set?.[1]).toBe(key);
+    expect(JSON.parse(set?.[2] ?? "{}")).toMatchObject({ driverId: A });
+    const exAt = (set ?? []).findIndex((x) => x.toUpperCase() === "EX");
+    expect(exAt).toBeGreaterThan(0);
+    expect(set?.[exAt + 1]).toBe("600");
+    await store.consumeOAuthState(state);
+    const ops = f.commands.map((c) => c[0].toLowerCase());
+    expect(ops).toEqual(["set", "getdel"]); // one atomic command, never get + del
+    expect(JSON.stringify(f.commands)).not.toContain(state);
+  });
+
+  it("a record older than the TTL is refused even if Redis kept it (defense in depth)", async () => {
+    const clock = { t: 1_000_000 };
+    const f = fakeUpstash(clock);
+    const store = new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok"), P, () => clock.t);
+    const state = await store.createOAuthState(A);
+    for (const e of f.kv.values()) delete e.exp; // the key "lost" its TTL
+    clock.t += 700_000;
+    expect(await store.consumeOAuthState(state)).toBeNull();
+  });
+
+  it("corrupt state records and unexpected reply types fail closed", async () => {
+    const clock = { t: 1_000_000 };
+    const f = fakeUpstash(clock);
+    const store = new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok"), P, () => clock.t);
+    const state = await store.createOAuthState(A);
+    for (const [k] of f.kv) f.kv.set(k, { v: JSON.stringify({ driverId: "../evil", createdAt: clock.t }) });
+    expect(await store.consumeOAuthState(state)).toBeNull();
+  });
+
+  it("Redis down: generic error, nothing of the SDK in it", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "ERR secret-detail" }), { status: 500 })));
+    const store = new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok-secret"), P);
+    for (const op of [() => store.createOAuthState(A), () => store.consumeOAuthState("A".repeat(43)), () => store.getSpotifyBlob(A), () => store.setSpotifyBlob(A, blobFor(A)), () => store.deleteSpotifyBlob(A), () => store.purgeDriverData(A)]) {
+      const err = await op().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(DriverStoreUnavailableError);
+      expect(String((err as Error).message) + String((err as Error).cause ?? "")).not.toMatch(/secret/);
+    }
+  });
+
+  it("purgeDriverData sends one DEL for spotify:<id> and driver-addr:<id> of that driver only", async () => {
+    const clock = { t: 1 };
+    const f = fakeUpstash(clock);
+    const store = new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok"), P, () => clock.t);
+    await store.purgeDriverData(A);
+    expect(f.commands).toEqual([["del", `${P}spotify:${A}`, `${P}driver-addr:${A}`]]);
+  });
+});

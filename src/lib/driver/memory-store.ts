@@ -1,5 +1,9 @@
 import {
+  OAUTH_STATE_TTL_SECONDS,
   assertPrefix,
+  assertSpotifyBlob,
+  generateOAuthState,
+  oauthStateHash,
   isValidDriverId,
   keys,
   validateInviteInput,
@@ -23,6 +27,8 @@ interface InviteRecord {
 export class MemoryDriverStore implements DriverStore {
   private drivers = new Map<string, Driver>();
   private invites = new Map<string, InviteRecord>();
+  private blobs = new Map<string, string>();
+  private states = new Map<string, { driverId: string; expiresAt: number }>();
   private counters = new Map<string, { n: number; resetAt: number }>();
 
   constructor(
@@ -46,6 +52,8 @@ export class MemoryDriverStore implements DriverStore {
     return [
       ...[...this.drivers.keys()].map((id) => keys.driver(this.prefix, id)),
       ...[...this.invites.keys()].map((h) => keys.invite(this.prefix, h)),
+      ...[...this.blobs.keys()].map((id) => keys.spotifyToken(this.prefix, id)),
+      ...[...this.states.keys()].map((h) => keys.oauthState(this.prefix, h)),
       ...[...this.counters.keys()].map((k) => keys.rateLimit(this.prefix, k)),
     ];
   }
@@ -82,6 +90,42 @@ export class MemoryDriverStore implements DriverStore {
     if (!isValidDriverId(driverId)) return;
     const d = this.drivers.get(driverId);
     if (d) d.status = "revoked";
+    this.blobs.delete(driverId);
+  }
+
+  async getSpotifyBlob(driverId: string): Promise<string | null> {
+    if (!isValidDriverId(driverId)) return null;
+    return this.blobs.get(driverId) ?? null;
+  }
+
+  async setSpotifyBlob(driverId: string, blob: string): Promise<void> {
+    assertSpotifyBlob(blob);
+    keys.spotifyToken(this.prefix, driverId); // validates the id
+    this.blobs.set(driverId, blob);
+  }
+
+  async deleteSpotifyBlob(driverId: string): Promise<void> {
+    if (isValidDriverId(driverId)) this.blobs.delete(driverId);
+  }
+
+  async createOAuthState(driverId: string): Promise<string> {
+    if (!isValidDriverId(driverId)) throw new Error("Invalid driverId");
+    const state = generateOAuthState();
+    this.states.set(oauthStateHash(state) as string, { driverId, expiresAt: this.now() + OAUTH_STATE_TTL_SECONDS * 1000 });
+    return state;
+  }
+
+  async consumeOAuthState(state: string): Promise<string | null> {
+    const hash = oauthStateHash(state);
+    if (!hash) return null;
+    // get + delete without an await in between: atomic and single use on the event loop.
+    const rec = this.states.get(hash);
+    this.states.delete(hash);
+    return rec && rec.expiresAt > this.now() ? rec.driverId : null;
+  }
+
+  async purgeDriverData(driverId: string): Promise<void> {
+    if (isValidDriverId(driverId)) this.blobs.delete(driverId);
   }
 
   async rotateSessions(driverId: string): Promise<void> {

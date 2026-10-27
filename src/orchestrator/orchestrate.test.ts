@@ -128,7 +128,7 @@ describe("orchestrate", () => {
       spotify: fakeAgent("spotify", 0),
       waze: fakeAgent("waze", 0, { speech: "Indo." }),
     };
-    const driverContext = { spotifyRefreshToken: "driver-token" };
+    const driverContext = {};
     await orchestrate("toca rock", { agents, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID, driverContext });
     expect(agents.spotify.handle).toHaveBeenCalledWith(
       expect.objectContaining({ driverContext }),

@@ -52,8 +52,9 @@ Em `tests/MANUAL.md`, com o PWA instalado na tela inicial (standalone) e contra 
 1. Merge dos PRs #1 a #8 na ordem e deploy.
 2. **Pepper de produção legível pelo script:** decisão pendente do dono (ver `ESTADO_ATUAL.md`); necessário para criar o convite do próprio dono em produção.
 3. O dono cria um convite para si (`npm run invite:create -- --env production --confirm-production ...`), resgata no PWA novo e roda `npm run driver:list` para ver o próprio `driverId` (não é segredo).
-4. Eu crio `FINN_OWNER_DRIVER_ID` em Production (e o dono reimplanta). Confirmar no carro: Spotify e endereços funcionando com a sessão nova.
-5. Eu removo `FINN_LEGACY_TOKEN_ENABLED` de Production e o dono reimplanta. O `FINN_API_TOKEN` deixa de abrir qualquer coisa. Só então criar convites para outras pessoas (e adicionar os e-mails delas na lista do Spotify; limite de 25).
+4. Eu crio `FINN_OWNER_DRIVER_ID` em Production com `printf %s` (sem newline) e o dono reimplanta. **Antes do passo 5, provar com a sessão nova (`v1.`), nunca com o token legado:** `GET /api/spotify/connection` dá `connected: true`, `POST /api/spotify/connect` dá 403 e a fala de endereço do carro funciona. O log `[auth] FINN_OWNER_DRIVER_ID is invalid; ignored` não pode aparecer. `npm run driver:list` marca o dono com "(dono)".
+   - Endereços ditados por voz sob o id legado ficam órfãos (a chave é por `driverId`): o dono dita `casa` e `trabalho` de novo uma vez; o hash antigo (`driver-addr:drv_legacy_owner_000000000`) fica no Redis e só se apaga à mão.
+5. Só então eu removo `FINN_LEGACY_TOKEN_ENABLED` de Production e o dono reimplanta. O `FINN_API_TOKEN` deixa de abrir qualquer coisa. Só então criar convites para outras pessoas (e adicionar os e-mails delas na lista do Spotify; limite de 25).
 
 ## Critério de pronto
 
@@ -75,3 +76,4 @@ Amarração do callback ao navegador (depende do teste no iOS); rate limit por m
 
 - 2026-10-27: rascunho, após a decisão A1 (opção C).
 - 2026-10-27: aprovado pelo dono, sem alterações.
+- 2026-10-27 (rodada 2 da 5a, após qa e security-review): decisões técnicas do orquestrador: `.trim()` no valor de `FINN_OWNER_DRIVER_ID` (o id continua comparado exato); o id legado é inválido como valor da variável; token legado e A2A exigem o dono ativo quando ele tem registro no store (revogar o dono corta os dois); `driver:list` marca o dono e `driver:revoke`/`driver:purge`/`driver:rotate` avisam quando o alvo é o dono; roteiro de virada ajustado (prova com a sessão nova antes do passo 5; endereços órfãos). Adiado como débito: CAS/`EXISTS` no resgate, encanamento de `env` em `refreshFor`, janela de refresh em voo.

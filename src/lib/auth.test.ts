@@ -1,27 +1,44 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { authorize } from "./auth";
+import { authorizeA2A } from "./auth";
 
 const req = (auth?: string) =>
   new Request("http://x/api/orchestrator", { headers: auth ? { authorization: auth } : {} });
 
-describe("authorize", () => {
+describe("authorizeA2A", () => {
   afterEach(() => vi.unstubAllEnvs());
+  const A2A = "a2a-0123456789abcdef0123456789abcdef-secret";
 
-  it("fails closed when FINN_API_TOKEN is unset", () => {
-    vi.stubEnv("FINN_API_TOKEN", "");
-    expect(authorize(req("Bearer anything"))?.status).toBe(503);
-  });
+  it.each([["unset", undefined], ["empty", ""], ["spaces", "   "], ["short", "s3cret"], ["31 chars", "abcdefghij0123456789abcdefghijk"], ["trivial", "a".repeat(40)], ["inner space", `${A2A.slice(0, 20)} ${A2A.slice(20)}`]])(
+    "is off (503) when FINN_A2A_TOKEN is %s, even with the right-looking bearer",
+    async (_l, value) => {
+      vi.stubEnv("FINN_A2A_TOKEN", value);
+      const res = authorizeA2A(req(`Bearer ${value ?? "x"}`))!;
+      expect(res.status).toBe(503);
+      expect(JSON.stringify(await res.json())).not.toContain(String(value || "\u0000"));
+    },
+  );
 
-  it("rejects missing or wrong tokens", () => {
-    vi.stubEnv("FINN_API_TOKEN", "s3cret");
-    expect(authorize(req())?.status).toBe(401);
-    expect(authorize(req("Bearer nope"))?.status).toBe(401);
-    expect(authorize(req("s3cret"))?.status).toBe(401);
+  it("rejects missing or wrong tokens with 401 + WWW-Authenticate", () => {
+    vi.stubEnv("FINN_A2A_TOKEN", A2A);
+    for (const h of [undefined, "Bearer nope", `Bearer ${A2A}x`, `Bearer ${A2A.slice(0, -1)}`, A2A, "Bearer "]) {
+      const res = authorizeA2A(req(h))!;
+      expect(res.status).toBe(401);
+      expect(res.headers.get("www-authenticate")).toBe("Bearer");
+    }
   });
 
   it("accepts the right bearer token", () => {
-    vi.stubEnv("FINN_API_TOKEN", "s3cret");
-    expect(authorize(req("Bearer s3cret"))).toBeNull();
+    vi.stubEnv("FINN_A2A_TOKEN", A2A);
+    expect(authorizeA2A(req(`Bearer ${A2A}`))).toBeNull();
+  });
+
+  it("FINN_API_TOKEN never opens it, even with the legacy flag on", () => {
+    vi.stubEnv("FINN_A2A_TOKEN", A2A);
+    vi.stubEnv("FINN_API_TOKEN", "x-api-token-0123456789abcdefghijklmnopqrstuv");
+    vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", "1");
+    expect(authorizeA2A(req("Bearer x-api-token-0123456789abcdefghijklmnopqrstuv"))?.status).toBe(401);
+    vi.stubEnv("FINN_A2A_TOKEN", "");
+    expect(authorizeA2A(req("Bearer x-api-token-0123456789abcdefghijklmnopqrstuv"))?.status).toBe(503);
   });
 });
 
@@ -178,11 +195,11 @@ describe("authorizeDriver", () => {
     });
   });
 
-  it("/api/agents/* still uses only authorize() (not authorizeDriver)", () => {
+  it("/api/agents/* uses only authorizeA2A() (not authorizeDriver)", () => {
     for (const f of ["src/app/api/agents/[agent]/route.ts", "src/app/api/agents/[agent]/card/route.ts"]) {
       const src = readFileSync(f, "utf8");
       expect(src).not.toContain("authorizeDriver");
     }
-    expect(readFileSync("src/app/api/agents/[agent]/route.ts", "utf8")).toMatch(/\bauthorize\(request\)/);
+    expect(readFileSync("src/app/api/agents/[agent]/route.ts", "utf8")).toMatch(/\bauthorizeA2A\(request\)/);
   });
 });

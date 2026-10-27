@@ -1,28 +1,32 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { authenticateSession, getDriverStore, getSessionSecret, type DriverStore } from "@/lib/driver";
 
-/**
- * Simple shared-secret auth for personal use: `Authorization: Bearer <FINN_API_TOKEN>`.
- * Returns an error Response when the request is not authorized, null otherwise.
- * Fails closed when the token is not configured.
- */
-export function authorize(request: Request): Response | null {
-  const expected = process.env.FINN_API_TOKEN?.trim();
-  if (!expected) {
-    console.error("[auth] FINN_API_TOKEN is not set; rejecting request");
-    return Response.json({ error: "Server auth not configured" }, { status: 503 });
-  }
+const A2A_MIN_LENGTH = 32;
 
-  const header = request.headers.get("authorization") ?? "";
-  const token = (header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "").trim();
-  const given = Buffer.from(token);
-  const wanted = Buffer.from(expected);
-  if (given.length !== wanted.length || !timingSafeEqual(given, wanted)) {
-    return Response.json(
-      { error: "Unauthorized" },
-      { status: 401, headers: { "WWW-Authenticate": "Bearer" } },
-    );
+/** Fixed-size digest compare: neither content nor length of the secret leaks through timing. */
+function digestEquals(given: string, expected: string): boolean {
+  return timingSafeEqual(createHash("sha256").update(given).digest(), createHash("sha256").update(expected).digest());
+}
+
+/** Valid secret: >= 32 chars, no whitespace inside, at least 10 distinct chars (rejects "aaaa...", "1234...", placeholders). */
+function isValidA2ASecret(value: string): boolean {
+  return value.length >= A2A_MIN_LENGTH && !/\s/.test(value) && new Set(value).size >= 10;
+}
+
+/**
+ * Auth for the A2A endpoint /api/agents/[agent] (POST): `Authorization: Bearer <FINN_A2A_TOKEN>`.
+ * A secret of its own: FINN_API_TOKEN is never accepted here. Returns an error Response, or null when authorized.
+ * Off (503, fail closed) when FINN_A2A_TOKEN is absent, empty, whitespace-only or invalid; 503 and not 401 because
+ * it is a server state, not a client credential error. Missing or wrong Bearer: 401 + WWW-Authenticate.
+ * Never logs values.
+ */
+export function authorizeA2A(request: Request): Response | null {
+  const expected = process.env.FINN_A2A_TOKEN?.trim();
+  if (!expected || !isValidA2ASecret(expected)) {
+    return Response.json({ error: "A2A endpoint disabled" }, { status: 503 });
   }
+  const token = extractBearer(request);
+  if (!token || !digestEquals(token, expected)) return UNAUTHORIZED();
   return null;
 }
 
@@ -52,10 +56,7 @@ function legacyMatches(token: string): boolean {
   if (process.env.FINN_LEGACY_TOKEN_ENABLED !== "1") return false;
   const expected = process.env.FINN_API_TOKEN?.trim();
   if (!expected) return false;
-  // Compare fixed-size digests so neither content nor length of FINN_API_TOKEN leaks through timing.
-  const given = createHash("sha256").update(token).digest();
-  const wanted = createHash("sha256").update(expected).digest();
-  return timingSafeEqual(given, wanted);
+  return digestEquals(token, expected);
 }
 
 /**

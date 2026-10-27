@@ -43,13 +43,16 @@ function a2aSecrets(): string[] | null {
   const secrets = [current];
   const next = process.env.FINN_A2A_TOKEN_NEXT?.trim();
   if (next) {
-    if (!isAcceptableSecret(next) || digestEquals(next, current)) return null;
+    // Hex is case-insensitive in intent: "AB.." and "ab.." are the same secret.
+    if (!isAcceptableSecret(next) || digestEquals(next.toLowerCase(), current.toLowerCase())) return null;
     secrets.push(next);
   }
   const api = process.env.FINN_API_TOKEN?.trim();
-  if (api && secrets.some((secret) => digestEquals(api, secret))) return null;
+  if (api && secrets.some((secret) => digestEquals(api.toLowerCase(), secret.toLowerCase()))) return null;
   return secrets;
 }
+
+const HEX64_RE = /^[0-9a-fA-F]{64}$/;
 
 function a2aBearerMatches(request: Request, secrets: string[]): boolean {
   const token = extractBearer(request);
@@ -88,8 +91,9 @@ const tooManyA2A = (windowSeconds: number) =>
 /**
  * A2A gate: failure rate limit in Redis BEFORE the Bearer is compared, then the same secret rules as `authorizeA2A`.
  * Key `ratelimit:a2a:<ip>` (unknown or invalid IP shares the `noip` bucket, with a lower limit).
- * Only FAILED attempts count: a client with the right secret is never throttled, a guesser is stopped at
- * the limit with 429 + Retry-After. Disabled configuration answers 503 first, without touching Redis.
+ * Only FAILED attempts count, but the lock-out is per IP and applies to everyone behind it: once an IP has
+ * used up its failures, even the right secret gets 429 until the window ends. A missing Bearer, or one that is
+ * not 64 hex, is a plain 401 that never touches Redis (and is not counted: it cannot be a guess). Disabled configuration answers 503 first, without touching Redis.
  * Redis down is 503 (A2A is external, there is no voice to speak to). Parallel requests can overshoot the
  * limit by their own concurrency (peek then increment is not atomic). Never logs values.
  */
@@ -99,6 +103,9 @@ export async function guardA2A(
 ): Promise<Response | null> {
   const secrets = a2aSecrets();
   if (!secrets) return a2aDisabled();
+
+  const bearer = extractBearer(request);
+  if (!bearer || !HEX64_RE.test(bearer)) return UNAUTHORIZED();
 
   const { id, known } = normalizeIpForRateLimit(getClientIp(request));
   const limit = known ? (deps.limit ?? A2A_RATE_LIMIT) : (deps.limitNoIp ?? A2A_RATE_LIMIT_NO_IP);

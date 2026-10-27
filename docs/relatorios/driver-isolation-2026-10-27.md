@@ -60,3 +60,29 @@ Linha de base: 558 passaram, 4 ignorados. Resultado final, no HEAD:
 - Teste de aceitação A2A alterado por mudança de comportamento do contrato (artifact público). O helper `callA2A` passa a mandar um IP novo por chamada, para não acoplar testes pelo limitador compartilhado.
 - NEXT sozinho (sem TOKEN) mantém o endpoint desligado; NEXT inválido desliga o endpoint inteiro (não "ignora o ruim").
 - Dono com token próprio diferente do do servidor continua usando o próprio (comportamento anterior), sem fallback para o do servidor.
+
+# Rodada 2 (correções de qa e security-review)
+
+Fontes: `docs/revisoes/driver-isolation-qa.md` e `driver-isolation-security-review.md` (não editados). Um commit novo sobre 122e141.
+
+## O que mudou
+- B1: `src/agents/spotify/index.test.ts` ganhou 3 testes de fiação com `driverId` de não dono (sem token: "Conecte seu Spotify." e zero chamadas; token ruim: o refresh token do servidor nunca aparece; dono continua no token do servidor). Mutação testada de verdade: com `whoIs()` fixando o `driverId` do dono em `src/agents/spotify/tools.ts`, o teste "sem token" falha (1 falhou, 20 passaram); mutação revertida (`git checkout`).
+- N2/M2: `guardA2A` devolve 401 para Bearer ausente ou fora de 64 hex sem tocar no store (503 de endpoint desligado continua antes de tudo). Não conta como falha. Teste com store espião: zero chamadas; com Redis fora também é 401. Testes antigos que usavam "wrong" passaram a usar um valor de 64 hex.
+- N3: `wazeAgent.handle` resolve o livro de forma preguiçosa (só em `get`/`set`); falha de resolução vira o erro genérico do store. Destino explícito navega com Redis fora e com produção sem `KV_*` (teste: nem o `fetch` é chamado).
+- N4/N5: `normalizeAddress` rejeita surrogate solto (`isWellFormed`), U+2028/2029, bidi U+202A-202E e U+2066-2069, zero-width U+200B-200D, U+2060, U+FEFF (um teste por classe).
+- N6: comparação TOKEN/NEXT/`FINN_API_TOKEN` em minúsculas (teste com maiúsculas nas três combinações).
+- N7: teste de `driverId` hostil no A2A reescrito: o id vem em `params.message`, nas partes e no data part (a mutação `message.driverId ?? OWNER` o derruba).
+- N10: `/api/orchestrator` responde 400 a corpo JSON que não seja objeto (null, array, número, string, boolean); cookie com `%` inválido é tratado como ausente.
+- N1/B3: comentário de `guardA2A` corrigido; `docs/procedimentos/rotacao-token-a2a.md` documenta limitador não atômico, 429 também para o segredo certo, 401 direto sem Redis e o passo "conferir casa e trabalho do dono" após vazamento.
+- Curadoria: `tests/qa/driver-isolation-qa.test.ts` virou `tests/acceptance/driver-isolation.test.ts` (diretório `tests/qa` removido). FINDING corrigidos (N3, N4, N6, N10) com asserção invertida; débitos mantidos com nome "debt": rajada paralela (N1) e balde `noip` compartilhado (N11, teste novo). Testes de garbage de Authorization agora afirmam zero contagem.
+
+## Testes rodados
+`npm test && npm run typecheck && npm run lint && npm run build`: 44 arquivos passaram, 1 ignorado; 700 testes passaram, 4 ignorados, 0 falharam (630 antes, mais os testes do qa agora em `tests/acceptance` e os novos desta rodada). typecheck 0 erros, lint limpo, build ok.
+
+## Desvios
+- Teste do qa movido para `tests/acceptance` em vez de manter `tests/qa`. Nada fora do escopo editado. Não implementei os itens marcados "não fazer".
+
+## Não verificado
+- Só a mutação do B1 foi executada de fato; as demais correções foram conferidas por raciocínio (remover a checagem de 64 hex, o resolver preguiçoso ou a minúscula faz o teste correspondente falhar), não rodadas.
+- `isWellFormed` exige Node 20+; o ambiente de deploy não foi conferido.
+- Continuam valendo os não verificados da rodada 1 (nada contra Upstash/Vercel/Spotify reais, hipótese do IP, PWA real).

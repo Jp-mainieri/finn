@@ -24,6 +24,10 @@ Se o redeploy do passo 2 ou 4 deixar o endpoint em 503, algum valor está invál
 
 Remover `FINN_A2A_TOKEN` e `FINN_A2A_TOKEN_NEXT` e fazer redeploy: o endpoint passa a responder 503. Para reabrir, siga "Criar" com um valor novo. Um segredo vazado não se "desfaz": troque-o sempre.
 
+Depois de um vazamento do segredo, conferir também a casa e o trabalho do dono: quem tinha o segredo agia como o dono e pode ter gravado outro endereço (o fluxo "qual é o endereço da sua casa?" grava a resposta). Se estiverem diferentes do esperado, o dono dita de novo (ou ajusta `WAZE_SAVED_ADDRESSES` e, se necessário, apaga a chave `driver-addr:` do dono no Redis, por script do dono).
+
 ## Limite de tentativas
 
-Falhas de autenticação são contadas no Redis por IP (`ratelimit:a2a:<ip>`): 10 falhas por 600 s; IP ausente ou inválido usa o balde `noip`, de 3. Passou do limite: 429 com `Retry-After`, mesmo para o segredo certo, até a janela expirar. Acertos não contam. Redis fora do ar: 503. A trava vale por IP, então atrás de NAT compartilhado um cliente errado pode bloquear os outros daquele IP durante 10 minutos.
+Falhas de autenticação são contadas no Redis por IP (`ratelimit:a2a:<ip>`): 10 falhas por 600 s; IP ausente ou inválido usa o balde `noip`, de 3. Passou do limite: 429 com `Retry-After`, mesmo para o segredo certo, até a janela expirar (o cliente certo atrás de um IP que estourou também é bloqueado). Acertos não contam. `Authorization` ausente ou que não tenha 64 hexadecimais é 401 direto, sem consultar o Redis e sem contar.
+
+O limitador não é atômico (lê o contador e depois incrementa): uma rajada de requisições paralelas do mesmo IP passa do teto, em até o número de requisições concorrentes. Só a requisição seguinte é barrada. Com segredo de 64 hex isso não torna a adivinhação viável, mas o teto não é exato. Redis fora do ar: 503. A trava vale por IP, então atrás de NAT compartilhado um cliente errado pode bloquear os outros daquele IP durante 10 minutos.

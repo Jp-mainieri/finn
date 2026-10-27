@@ -301,6 +301,28 @@ describe("wazeAgent through the orchestrator", () => {
       expect(err).not.toHaveBeenCalled();
     });
 
+    it("an explicit destination still navigates when Redis is down or production has no KV variables (book is lazy)", async () => {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const fetchMock = redisDown();
+      useModel(navigateScript("Avenida Paulista, 1000"));
+      const down = await handle("me leva pra Avenida Paulista, 1000");
+      expect(down.status).toBe("completed");
+      expect(down.clientActions).toHaveLength(1);
+      vi.unstubAllGlobals();
+      const unused = vi.fn();
+      vi.stubGlobal("fetch", unused);
+      vi.stubEnv("VERCEL_ENV", "production");
+      vi.stubEnv("KV_REST_API_URL", "");
+      vi.stubEnv("KV_REST_API_TOKEN", "");
+      useModel(navigateScript("Avenida Paulista, 1000"));
+      const prod = await handle("me leva pra Avenida Paulista, 1000");
+      expect(prod.status).toBe("completed");
+      expect(prod.clientActions).toHaveLength(1);
+      expect(fetchMock).not.toHaveBeenCalled(); // not even touched
+      expect(unused).not.toHaveBeenCalled();
+      expect(err).not.toHaveBeenCalled();
+    });
+
     it("production without Redis variables is a short failure too (fail closed, no memory)", async () => {
       vi.stubEnv("VERCEL_ENV", "production");
       vi.stubEnv("KV_REST_API_URL", "");

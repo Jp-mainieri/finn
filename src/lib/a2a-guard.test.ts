@@ -18,6 +18,7 @@ import { RATELIMIT_SCRIPT } from "./driver/upstash-store";
 
 const A2A = "9c1e47d2b86a30f5e7d4c2a91b68f03e5d7a24c9e1b0836f4a5d2c7e91f0b3a8";
 const NEXT = "5d2b8f1a7c3e904d6b1a8e5f2c7d03a94b6e1f8c5a2d7039e4b1c6f8a5d20e73";
+const WRONG = "e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f30211203f4e5d6c7b8a9f0"; // 64 hex, not a secret
 const API = "x-api-token-0123456789abcdefghijklmnopqrstuv";
 
 const T0 = 1_800_000_000_000;
@@ -47,9 +48,9 @@ describe("guardA2A failure rate limit", () => {
   it("allows 10 failures per IP, then 429 + Retry-After, even for the right secret afterwards", async () => {
     const { store } = setup();
     for (let i = 0; i < A2A_RATE_LIMIT.max; i++) {
-      expect((await guardA2A(req("Bearer wrong", "1.2.3.4"), { store }))?.status).toBe(401);
+      expect((await guardA2A(req(`Bearer ${WRONG}`, "1.2.3.4"), { store }))?.status).toBe(401);
     }
-    const blocked = (await guardA2A(req("Bearer wrong", "1.2.3.4"), { store }))!;
+    const blocked = (await guardA2A(req(`Bearer ${WRONG}`, "1.2.3.4"), { store }))!;
     expect(blocked.status).toBe(429);
     expect(blocked.headers.get("retry-after")).toBe(String(A2A_RATE_LIMIT.windowSeconds));
     // the lock-out also covers the right secret (the limiter runs before the comparison)
@@ -66,7 +67,7 @@ describe("guardA2A failure rate limit", () => {
 
   it("the window expires and the counter starts again", async () => {
     const { store, clock } = setup();
-    for (let i = 0; i < A2A_RATE_LIMIT.max; i++) await guardA2A(req("Bearer wrong", "1.2.3.4"), { store });
+    for (let i = 0; i < A2A_RATE_LIMIT.max; i++) await guardA2A(req(`Bearer ${WRONG}`, "1.2.3.4"), { store });
     expect((await guardA2A(req(`Bearer ${A2A}`, "1.2.3.4"), { store }))?.status).toBe(429);
     clock.t += (A2A_RATE_LIMIT.windowSeconds + 1) * 1000;
     expect(await guardA2A(req(`Bearer ${A2A}`, "1.2.3.4"), { store })).toBeNull();
@@ -74,7 +75,7 @@ describe("guardA2A failure rate limit", () => {
 
   it("missing, empty or invalid IP share the 'noip' bucket with a lower limit (3)", async () => {
     const { store } = setup();
-    const noIp = [req("Bearer wrong"), req("Bearer wrong", "not-an-ip"), req("Bearer wrong", "", { "x-forwarded-for": "garbage" })];
+    const noIp = [req(`Bearer ${WRONG}`), req(`Bearer ${WRONG}`, "not-an-ip"), req(`Bearer ${WRONG}`, "", { "x-forwarded-for": "garbage" })];
     for (let i = 0; i < A2A_RATE_LIMIT_NO_IP.max; i++) {
       expect((await guardA2A(noIp[i % 3], { store }))?.status).toBe(401);
     }
@@ -87,17 +88,17 @@ describe("guardA2A failure rate limit", () => {
   it("limits are adjustable through deps", async () => {
     const { store } = setup();
     const limit = { max: 2, windowSeconds: 30 };
-    await guardA2A(req("Bearer wrong", "1.1.1.1"), { store, limit });
-    await guardA2A(req("Bearer wrong", "1.1.1.1"), { store, limit });
-    const res = (await guardA2A(req("Bearer wrong", "1.1.1.1"), { store, limit }))!;
+    await guardA2A(req(`Bearer ${WRONG}`, "1.1.1.1"), { store, limit });
+    await guardA2A(req(`Bearer ${WRONG}`, "1.1.1.1"), { store, limit });
+    const res = (await guardA2A(req(`Bearer ${WRONG}`, "1.1.1.1"), { store, limit }))!;
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("30");
   });
 
   it("counters use only the ratelimit:a2a: key under the env prefix", async () => {
     const { store } = setup();
-    await guardA2A(req("Bearer wrong", "1.2.3.4"), { store });
-    await guardA2A(req("Bearer wrong", "2001:db8:1:2:3:4:5:6"), { store });
+    await guardA2A(req(`Bearer ${WRONG}`, "1.2.3.4"), { store });
+    await guardA2A(req(`Bearer ${WRONG}`, "2001:db8:1:2:3:4:5:6"), { store });
     expect(store.allKeys().sort()).toEqual([
       "finn:test:ratelimit:a2a:1.2.3.4",
       "finn:test:ratelimit:a2a:v6-2001-db8-1-2",
@@ -110,7 +111,7 @@ describe("guardA2A failure rate limit", () => {
         throw new DriverStoreUnavailableError();
       },
     });
-    for (const auth of [`Bearer ${A2A}`, "Bearer wrong"]) {
+    for (const auth of [`Bearer ${A2A}`, `Bearer ${WRONG}`]) {
       const res = (await guardA2A(req(auth, "1.2.3.4"), { store: down }))!;
       expect(res.status).toBe(503);
       expect(await res.text()).not.toMatch(/Redis|upstash|secret/i);
@@ -124,7 +125,24 @@ describe("guardA2A failure rate limit", () => {
     flaky.incrementRateLimit = async () => {
       throw new DriverStoreUnavailableError();
     };
-    expect((await guardA2A(req("Bearer wrong", "1.2.3.4"), { store: flaky }))?.status).toBe(503);
+    expect((await guardA2A(req(`Bearer ${WRONG}`, "1.2.3.4"), { store: flaky }))?.status).toBe(503);
+  });
+
+  it("missing Bearer or not 64 hex: plain 401, zero calls to the store, not counted", async () => {
+    const store = { peekRateLimit: vi.fn(), incrementRateLimit: vi.fn() } as unknown as DriverStore;
+    for (const h of [undefined, "Bearer", "Bearer ", "Basic abc", "Bearer wrong", `Bearer ${A2A}x`, `Bearer ${A2A.slice(1)}`, `Bearer ${A2A.slice(0, 63)}g`, `Bearer ${A2A} x`]) {
+      const res = (await guardA2A(req(h, "1.2.3.4"), { store }))!;
+      expect(res.status).toBe(401);
+      expect(res.headers.get("www-authenticate")).toBe("Bearer");
+    }
+    expect(store.peekRateLimit).not.toHaveBeenCalled();
+    expect(store.incrementRateLimit).not.toHaveBeenCalled();
+  });
+
+  it("with Redis down, a missing or malformed Bearer is still 401 (it never needed Redis)", async () => {
+    const down: DriverStore = new Proxy({} as DriverStore, { get: () => async () => { throw new DriverStoreUnavailableError(); } });
+    expect((await guardA2A(req(undefined, "1.2.3.4"), { store: down }))?.status).toBe(401);
+    expect((await guardA2A(req("Bearer nope", "1.2.3.4"), { store: down }))?.status).toBe(401);
   });
 
   it("disabled configuration answers 503 first, without touching the store", async () => {
@@ -164,6 +182,19 @@ describe("A2A secret rotation (FINN_A2A_TOKEN_NEXT)", () => {
     vi.stubEnv("FINN_API_TOKEN", API);
     expect(authorizeA2A(req(`Bearer ${NEXT}`))).toBeNull();
     vi.stubEnv("FINN_API_TOKEN", ` ${A2A} `);
+    expect(authorizeA2A(req(`Bearer ${A2A}`))?.status).toBe(503);
+  });
+
+  it("equality is checked in lowercase: NEXT or API token equal to TOKEN in another case is rejected (503)", () => {
+    vi.stubEnv("FINN_A2A_TOKEN_NEXT", A2A.toUpperCase());
+    expect(authorizeA2A(req(`Bearer ${A2A}`))?.status).toBe(503);
+    vi.stubEnv("FINN_A2A_TOKEN_NEXT", "");
+    resetA2ADisabledLogForTests();
+    vi.stubEnv("FINN_API_TOKEN", A2A.toUpperCase());
+    expect(authorizeA2A(req(`Bearer ${A2A}`))?.status).toBe(503);
+    vi.stubEnv("FINN_API_TOKEN", API);
+    vi.stubEnv("FINN_A2A_TOKEN", A2A.toUpperCase());
+    vi.stubEnv("FINN_A2A_TOKEN_NEXT", A2A);
     expect(authorizeA2A(req(`Bearer ${A2A}`))?.status).toBe(503);
   });
 

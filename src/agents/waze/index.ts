@@ -1,11 +1,12 @@
 import { runToolLoop } from "@/lib/agent-runtime";
 import type { Agent, AgentResult } from "@/lib/contracts/a2a";
+import { DriverStoreUnavailableError } from "@/lib/driver/store";
 import { WAZE_TOOLS } from "@/lib/contracts/tools";
 import { getNeuralakeClient } from "@/lib/neuralake/client";
 import { getAddressBook, type AddressBook } from "@/lib/waze/address-book";
 import { wazeAgentCard } from "./card";
 import { buildSystemPrompt } from "./prompt";
-import { ADDRESS_STORE_UNAVAILABLE_SPEECH, createNavigateTo, parseContinuation } from "./tools";
+import { createNavigateTo, parseContinuation } from "./tools";
 
 export const WAZE_KEYWORDS: readonly RegExp[] = [
   // "vai pra próxima" is a music skip, not navigation.
@@ -86,20 +87,23 @@ export const wazeAgent: Agent = {
     // Closed list: anything that is not exactly a known shape is ignored (the client can send anything).
     const continuation = parseContinuation(input.continuation);
     // The book belongs to input.driverId (server-proven). driverContext.savedAddresses is ignored.
-    // A configuration or store failure is a short spoken failure, never a fall back to another book,
-    // and nothing about the error is logged.
-    let book: AddressBook;
-    try {
-      book = getAddressBook(input.driverId);
-    } catch {
-      return {
-        agent: "waze",
-        status: "failed",
-        speech: ADDRESS_STORE_UNAVAILABLE_SPEECH,
-        clientActions: [],
-        toolCalls: [],
-      };
-    }
+    // It is resolved lazily, only when a label (casa/trabalho) or a pending answer needs it, so an explicit
+    // destination works even when Redis is down or unconfigured. A resolution failure is the same generic
+    // store error as a Redis failure (short spoken failure, never another book, nothing logged).
+    let resolved: AddressBook | undefined;
+    const bookOf = (): AddressBook => {
+      if (resolved) return resolved;
+      try {
+        resolved = getAddressBook(input.driverId);
+      } catch {
+        throw new DriverStoreUnavailableError();
+      }
+      return resolved;
+    };
+    const book: AddressBook = {
+      get: async (label) => bookOf().get(label),
+      set: async (label, address) => bookOf().set(label, address),
+    };
     const navigateTo = createNavigateTo(book, continuation);
     const result = await runToolLoop({
       agent: "waze",

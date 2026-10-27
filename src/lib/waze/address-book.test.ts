@@ -95,6 +95,30 @@ describe("normalizeAddress", () => {
       expect(() => normalizeAddress(v)).toThrow(InvalidAddressError);
     },
   );
+  it.each([
+    ["lone high surrogate", "Rua \ud800"],
+    ["lone low surrogate", "Rua \udc00 X"],
+    ["line separator U+2028", "Rua X\u2028Y"],
+    ["paragraph separator U+2029", "Rua X\u2029Y"],
+    ["bidi LRE U+202A", "Rua \u202aX"],
+    ["bidi RLO U+202E", "Rua \u202eX"],
+    ["bidi PDF/LRM-class U+202C", "Rua X\u202c"],
+    ["bidi isolate U+2066", "Rua \u2066X"],
+    ["bidi isolate U+2069", "Rua X\u2069"],
+    ["zero-width space U+200B", "Rua\u200bX"],
+    ["ZWNJ U+200C", "Rua\u200cX"],
+    ["ZWJ U+200D", "Rua\u200dX"],
+    ["word joiner U+2060", "Rua\u2060X"],
+    ["BOM/ZWNBSP U+FEFF", "Rua\ufeffX"],
+  ])("rejects %s", (_n, v) => {
+    expect(() => normalizeAddress(v)).toThrow(InvalidAddressError);
+  });
+
+  it("still accepts accents, emoji pairs and a NBSP inside", () => {
+    expect(normalizeAddress("Av. São João, 1 \u{1F600}")).toBe("Av. São João, 1 \u{1F600}");
+    expect(normalizeAddress("Rua\u00a0X")).toBe("Rua\u00a0X");
+  });
+
   it("the error never carries the value", () => {
     try {
       normalizeAddress("Rua Secreta\u0000");

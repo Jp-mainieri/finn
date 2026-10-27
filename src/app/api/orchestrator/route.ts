@@ -8,7 +8,12 @@ function getCookie(request: Request, name: string): string | undefined {
   const header = request.headers.get("cookie");
   if (!header) return undefined;
   const match = header.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
-  return match ? decodeURIComponent(match[1]) : undefined;
+  if (!match) return undefined;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return undefined; // malformed %-escape: treated as absent
+  }
 }
 
 export async function POST(request: Request) {
@@ -19,6 +24,10 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 

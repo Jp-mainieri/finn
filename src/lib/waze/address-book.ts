@@ -31,14 +31,16 @@ export class InvalidAddressError extends Error {
   }
 }
 
-// Control chars (C0, DEL, C1), which also covers NUL, newline and the ESC of ANSI sequences.
-const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/;
+// Control chars (C0, DEL, C1: NUL, newline, the ESC of ANSI sequences), line/paragraph separators,
+// bidi embedding/override/isolate controls and zero-width characters (invisible or reordering text).
+const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202A-\u202E\u2066-\u2069\u200B-\u200D\u2060\uFEFF]/;
 
 /** Trims; 1..200 characters, no control characters. Throws InvalidAddressError (never echoes the value). */
 export function normalizeAddress(raw: unknown): string {
   if (typeof raw !== "string") throw new InvalidAddressError();
   const t = raw.trim();
-  if (t.length < 1 || t.length > MAX_ADDRESS_LENGTH || CONTROL_RE.test(t)) throw new InvalidAddressError();
+  // isWellFormed: a lone surrogate would later make encodeURIComponent throw on every route to that label.
+  if (t.length < 1 || t.length > MAX_ADDRESS_LENGTH || CONTROL_RE.test(t) || !t.isWellFormed()) throw new InvalidAddressError();
   return t;
 }
 

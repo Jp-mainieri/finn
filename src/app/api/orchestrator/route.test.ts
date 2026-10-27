@@ -74,4 +74,24 @@ describe("POST /api/orchestrator driver identity", () => {
     await post({ transcript: "Rua A, 1", continuation: { agent: "waze", state: { pendingLabel: "casa" } } });
     expect(h.seen.find((i) => i.continuation !== undefined)?.continuation).toEqual({ pendingLabel: "casa" });
   });
+
+  it.each([["null", "null"], ["array", "[]"], ["number", "5"], ["string", '"x"'], ["true", "true"]])(
+    "a JSON body that is %s is 400, never an exception",
+    async (_n, raw) => {
+      const res = await POST(
+        new Request("http://x/api/orchestrator", { method: "POST", headers: { authorization: "Bearer t" }, body: raw }),
+      );
+      expect(res.status).toBe(400);
+      expect(h.seen).toHaveLength(0);
+    },
+  );
+
+  it("a malformed %-escape in the Spotify cookie is treated as absent, not an exception", async () => {
+    const res = await post({ transcript: "toca rock" }, { cookie: "finn_spotify_rt=%E0%A4%A" });
+    expect(res.status).toBe(200);
+    expect(h.seen[0].driverContext).toBeUndefined();
+    const ok = await post({ transcript: "toca rock" }, { cookie: "finn_spotify_rt=bad%zz; finn_spotify_token=fine%20tok" });
+    expect(ok.status).toBe(200);
+    expect(h.seen.at(-1)?.driverContext).toEqual({ spotifyRefreshToken: "fine tok" });
+  });
 });

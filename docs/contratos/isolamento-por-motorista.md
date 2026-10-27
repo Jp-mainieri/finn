@@ -1,6 +1,6 @@
 # Contrato — isolamento por motorista (etapa 1, entrega 3)
 
-Status: **rascunho, aguardando aprovação do dono** (2026-10-27). Base: [`identidade-e-perfil.md`](./identidade-e-perfil.md) (entrega 3 da lista de entregas) e os achados C1 (entrega 2) e M1 (A2A) em `docs/revisoes/`.
+Status: **aprovado pelo dono em 2026-10-27** (com as 3 decisões embutidas). Base: [`identidade-e-perfil.md`](./identidade-e-perfil.md) (entrega 3 da lista de entregas) e os achados C1 (entrega 2) e M1 (A2A) em `docs/revisoes/`.
 
 ## Objetivo
 
@@ -90,3 +90,4 @@ Criptografia do refresh token e saída dele do `driverContext` (entrega 4); PWA 
 ## Histórico de mudanças
 
 - 2026-10-27: rascunho.
+- 2026-10-27: aprovado pelo dono, sem alterações.

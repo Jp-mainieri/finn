@@ -2,10 +2,10 @@ import { runToolLoop } from "@/lib/agent-runtime";
 import type { Agent, AgentResult } from "@/lib/contracts/a2a";
 import { WAZE_TOOLS } from "@/lib/contracts/tools";
 import { getNeuralakeClient } from "@/lib/neuralake/client";
-import { getAddressBook } from "@/lib/waze/address-book";
+import { getAddressBook, type AddressBook } from "@/lib/waze/address-book";
 import { wazeAgentCard } from "./card";
 import { buildSystemPrompt } from "./prompt";
-import { createNavigateTo, parseContinuation } from "./tools";
+import { ADDRESS_STORE_UNAVAILABLE_SPEECH, createNavigateTo, parseContinuation } from "./tools";
 
 export const WAZE_KEYWORDS: readonly RegExp[] = [
   // "vai pra próxima" is a music skip, not navigation.
@@ -85,7 +85,20 @@ export const wazeAgent: Agent = {
   handle: async (input) => {
     const continuation = parseContinuation(input.continuation);
     // The book belongs to input.driverId (server-proven). driverContext.savedAddresses is ignored.
-    const book = getAddressBook(input.driverId);
+    // A configuration or store failure is a short spoken failure, never a fall back to another book,
+    // and nothing about the error is logged.
+    let book: AddressBook;
+    try {
+      book = getAddressBook(input.driverId);
+    } catch {
+      return {
+        agent: "waze",
+        status: "failed",
+        speech: ADDRESS_STORE_UNAVAILABLE_SPEECH,
+        clientActions: [],
+        toolCalls: [],
+      };
+    }
     const navigateTo = createNavigateTo(book, continuation);
     const result = await runToolLoop({
       agent: "waze",

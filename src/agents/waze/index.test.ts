@@ -242,6 +242,59 @@ describe("wazeAgent through the orchestrator", () => {
     expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID).get("casa")).toBe("Casa do Dono");
   });
 
+  describe("Redis down", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    function redisDown() {
+      vi.stubEnv("KV_REST_API_URL", "https://fake.upstash.example");
+      vi.stubEnv("KV_REST_API_TOKEN", "fake-token");
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "ERR secret-detail" }), { status: 500 }));
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    it("speaks a short failure, never falls back to the owner's seed, logs nothing", async () => {
+      vi.stubEnv("WAZE_SAVED_ADDRESSES", JSON.stringify({ casa: "Casa do Dono" }));
+      const fetchMock = redisDown();
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      useModel(navigateScript("casa"));
+      for (const driverId of [LEGACY_OWNER_DRIVER_ID, "drv_" + "B".repeat(22)]) {
+        const res = await wazeAgent.handle({ transcript: "me leva pra casa", contextId: "ctx", driverId });
+        expect(res).toMatchObject({ status: "failed", speech: "Não consegui acessar seus endereços agora.", clientActions: [] });
+        expect(JSON.stringify(res)).not.toMatch(/Casa do Dono|secret-detail/);
+      }
+      expect(fetchMock).toHaveBeenCalled();
+      expect(err).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("saving also fails short when Redis is down", async () => {
+      redisDown();
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      useModel(navigateScript("Rua Augusta, 123"));
+      const res = await wazeAgent.handle({
+        transcript: "Rua Augusta, 123",
+        contextId: "ctx",
+        driverId: "drv_" + "B".repeat(22),
+        continuation: { pendingLabel: "casa" },
+      });
+      expect(res).toMatchObject({ status: "failed", speech: "Não consegui acessar seus endereços agora.", clientActions: [] });
+      expect(err).not.toHaveBeenCalled();
+    });
+
+    it("production without Redis variables is a short failure too (fail closed, no memory)", async () => {
+      vi.stubEnv("VERCEL_ENV", "production");
+      vi.stubEnv("KV_REST_API_URL", "");
+      vi.stubEnv("KV_REST_API_TOKEN", "");
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      useModel(navigateScript("casa"));
+      const res = await wazeAgent.handle({ transcript: "me leva pra casa", contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
+      expect(res).toMatchObject({ status: "failed", speech: "Não consegui acessar seus endereços agora." });
+      expect(err).not.toHaveBeenCalled();
+    });
+  });
+
   it("emits save_address clientAction when driverContext is provided", async () => {
     useModel(navigateScript("Rua Oscar Freire, 100"));
     const res = await wazeAgent.handle({

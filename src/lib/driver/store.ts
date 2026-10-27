@@ -61,6 +61,11 @@ export const keys = {
   /** Set of every driverId (fed by createDriver and, inside the same EVAL, by the invite redeem). */
   driversIndex: (prefix: string) => `${prefix}drivers`,
   spotifyIndex: (prefix: string, spotifyUserId: string) => `${prefix}spotify-index:${spotifyUserId}`,
+  /** Saved addresses of ONE driver: hash { casa, trabalho }. The id is validated: no free-form key. */
+  driverAddr: (prefix: string, driverId: string) => {
+    if (!isValidDriverId(driverId)) throw new Error("Invalid driverId");
+    return `${prefix}driver-addr:${driverId}`;
+  },
   /** Only `ratelimit:`-prefixed keys with a restricted charset are accepted. */
   rateLimit: (prefix: string, key: string) => {
     if (typeof key !== "string" || !RATE_KEY_RE.test(key)) throw new Error("Invalid rate limit key");

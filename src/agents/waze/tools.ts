@@ -1,5 +1,6 @@
-import type { ToolExecutor, ToolOutput } from "@/lib/agent-runtime";
-import type { AddressBook } from "@/lib/waze/address-book";
+import { UserFacingError, type ToolExecutor, type ToolOutput } from "@/lib/agent-runtime";
+import { DriverStoreUnavailableError } from "@/lib/driver/store";
+import { normalizeAddress, type AddressBook } from "@/lib/waze/address-book";
 import { wazeDeepLink } from "@/lib/waze/deep-link";
 import { isSavedLabel, toSavedLabel, type SavedLabel } from "@/lib/waze/labels";
 
@@ -23,6 +24,19 @@ export interface NavigateResult {
   navigating_to: string;
   saved_place?: true;
   address_saved_now?: true;
+}
+
+/** Short and non-technical; the SDK error is never logged or passed on. */
+export const ADDRESS_STORE_UNAVAILABLE_SPEECH = "Não consegui acessar seus endereços agora.";
+
+/** Redis trouble becomes a short spoken failure (never a fall back to another book). */
+export async function guardAddressStore<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof DriverStoreUnavailableError) throw new UserFacingError(ADDRESS_STORE_UNAVAILABLE_SPEECH);
+    throw err;
+  }
 }
 
 const LABEL_TEXT: Record<SavedLabel, string> = { casa: "casa", trabalho: "o trabalho" };
@@ -53,9 +67,16 @@ export function createNavigateTo(book: AddressBook, continuation?: WazeContinuat
     // Driver's answer to "qual o endereço da sua casa?" (unless they repeated the label itself).
     if (pendingLabel && !label) {
       const answered = pendingLabel;
+      let address: string;
+      try {
+        address = normalizeAddress(destination);
+      } catch {
+        // Not storable (too long, control characters): ask again, keeping the pending label.
+        return { result: { needs_address: answered, invalid_address: true }, continuation: { pendingLabel: answered } };
+      }
       pendingLabel = undefined;
-      await book.set(answered, destination);
-      const out = navigate(destination, LABEL_TEXT[answered], {
+      await guardAddressStore(() => book.set(answered, address));
+      const out = navigate(address, LABEL_TEXT[answered], {
         navigating_to: answered,
         saved_place: true,
         address_saved_now: true,
@@ -63,14 +84,14 @@ export function createNavigateTo(book: AddressBook, continuation?: WazeContinuat
       if (input.driverContext) {
         out.clientActions = [
           ...(out.clientActions ?? []),
-          { type: "save_address", label: answered, address: destination },
+          { type: "save_address", label: answered, address },
         ];
       }
       return out;
     }
 
     if (label) {
-      const saved = await book.get(label);
+      const saved = await guardAddressStore(() => book.get(label));
       if (!saved) return { result: { needs_address: label }, continuation: { pendingLabel: label } };
       return navigate(saved, LABEL_TEXT[label], { navigating_to: label, saved_place: true });
     }

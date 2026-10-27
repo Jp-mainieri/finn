@@ -625,6 +625,43 @@ describe("one Spotify account, one driver (spotify-index, SET NX)", () => {
 });
 
 describe("callback configuration and timeouts", () => {
+  it("the owner lookup honors the env it is given (not process.env): without SPOTIFY_REFRESH_TOKEN there it is skipped", async () => {
+    const { handleCallback } = await import("@/lib/spotify/connect");
+    const a = await newDriver("A");
+    nextProfile = { id: "owner-spotify-id" };
+    const state = await startConnect(a.token);
+    const env = { ...process.env, SPOTIFY_REFRESH_TOKEN: "" };
+    const res = await handleCallback(new Request(`https://finn.test/api/spotify/callback?code=${CODE}&state=${state}`), { env, store });
+    expect(res.status).toBe(200);
+    expect(grantCalls("refresh_token")).toHaveLength(0);
+  });
+
+  it("an owner refresh that never answers: the callback refuses within the 5 s signal, generic page, nothing stored, no log", async () => {
+    const a = await newDriver("A");
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((u: string, init: RequestInit) => {
+        const grant = new URLSearchParams(String(init.body ?? "")).get("grant_type");
+        if (u === TOKEN_URL && grant === "refresh_token") {
+          // hangs until its signal fires; with the timer mocked to fire immediately it rejects at once
+          return new Promise((_, rej) => (init.signal?.aborted ? rej(new DOMException("aborted", "TimeoutError")) : init.signal?.addEventListener("abort", () => rej(new DOMException("aborted", "TimeoutError")))));
+        }
+        return fake.fetch(u, init);
+      }),
+    );
+    const state = await startConnect(a.token);
+    const seen: number[] = [];
+    timeout.mockImplementation((ms: number) => (seen.push(ms), ms === 5000 && seen.length > 2 ? AbortSignal.abort() : new AbortController().signal));
+    const res = await Promise.race([callback(`code=${CODE}&state=${state}`), new Promise<"hung">((r) => setTimeout(() => r("hung"), 500))]);
+    expect(res).not.toBe("hung");
+    expect((res as Response).status).toBe(502);
+    expect(await store.getSpotifyBlob(a.id)).toBeNull();
+    expect(store.allKeys().filter((k) => k.includes("spotify-index:") || k.includes("spotify-account:"))).toEqual([]);
+    expect(logged()).not.toMatch(/TimeoutError|aborted/);
+    expect(seen.filter((ms) => ms === 5000).length).toBeGreaterThanOrEqual(3); // exchange, /me, owner refresh
+  });
+
   it("VERCEL_ENV=production without SPOTIFY_REDIRECT_URI: connect is 503 and the callback fails closed (state not consumed, nothing exchanged or stored)", async () => {
     const a = await newDriver("A");
     const state = await startConnect(a.token);

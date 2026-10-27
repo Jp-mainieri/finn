@@ -133,7 +133,7 @@ export async function handleCallback(request: Request, deps: ConnectDeps = {}): 
     // Whose Spotify account consented? Unknown account = refuse (fail closed).
     const profile = await fetchSpotifyProfile(accessToken);
     if (!profile) return failurePage(502);
-    const ownerId = await getOwnerSpotifyUserId(); // throws if the owner token exists but cannot be resolved
+    const ownerId = await getOwnerSpotifyUserId(env); // throws if the owner token exists but cannot be resolved
     if (ownerId && ownerId === profile.id) return failurePage(400);
     // One Spotify account belongs to one driver (SET NX); the same driver reconnecting is fine.
     if ((await store.linkSpotifyAccount(driverId, profile.id)) === "conflict") return failurePage(400);

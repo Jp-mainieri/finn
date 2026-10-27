@@ -243,10 +243,16 @@ export class UpstashDriverStore implements DriverStore {
 
   async deleteSpotifyBlob(driverId: string): Promise<void> {
     if (!isValidDriverId(driverId)) return;
+    // The token goes FIRST: a failing unlink must never leave the token behind. The pointer is deleted last,
+    // so a failed release can be retried (the pointer is how it finds the index entry).
+    const r = await this.call(() => this.redis.del(keys.spotifyToken(this.prefix, driverId)));
+    if (typeof r !== "number") throw new DriverStoreUnavailableError();
+    await this.releaseAccount(driverId);
+  }
+
+  private async releaseAccount(driverId: string): Promise<void> {
     await this.unlinkAccount(driverId);
-    const r = await this.call(() =>
-      this.redis.del(keys.spotifyToken(this.prefix, driverId), keys.spotifyAccount(this.prefix, driverId)),
-    );
+    const r = await this.call(() => this.redis.del(keys.spotifyAccount(this.prefix, driverId)));
     if (typeof r !== "number") throw new DriverStoreUnavailableError();
   }
 
@@ -299,15 +305,12 @@ export class UpstashDriverStore implements DriverStore {
 
   async purgeDriverData(driverId: string): Promise<void> {
     if (!isValidDriverId(driverId)) return;
-    await this.unlinkAccount(driverId);
+    // Token and addresses first (see deleteSpotifyBlob), then the account link.
     const r = await this.call(() =>
-      this.redis.del(
-        keys.spotifyToken(this.prefix, driverId),
-        keys.driverAddr(this.prefix, driverId),
-        keys.spotifyAccount(this.prefix, driverId),
-      ),
+      this.redis.del(keys.spotifyToken(this.prefix, driverId), keys.driverAddr(this.prefix, driverId)),
     );
     if (typeof r !== "number") throw new DriverStoreUnavailableError();
+    await this.releaseAccount(driverId);
   }
 
   async rotateSessions(driverId: string): Promise<void> {

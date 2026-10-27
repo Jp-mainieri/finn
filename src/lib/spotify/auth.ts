@@ -240,10 +240,12 @@ export async function exchangeAuthorizationCode(
  * Null when the server has no owner token (the owner check is then skipped). Throws when the token exists but the
  * lookup fails: callers fail closed.
  */
-export async function getOwnerSpotifyUserId(): Promise<string | null> {
-  if (!process.env.SPOTIFY_REFRESH_TOKEN?.trim()) return null;
+export async function getOwnerSpotifyUserId(env: Record<string, string | undefined> = process.env): Promise<string | null> {
+  if (!env.SPOTIFY_REFRESH_TOKEN?.trim()) return null;
   if (ownerSpotifyUserId) return ownerSpotifyUserId;
-  const profile = await fetchSpotifyProfile(await getAccessToken({ driverId: LEGACY_OWNER_DRIVER_ID }));
+  // Both the owner's refresh and /v1/me are bounded (5 s each); an abort is just a failure to the caller (no log, no detail).
+  const accessToken = await getAccessToken({ driverId: LEGACY_OWNER_DRIVER_ID, signal: AbortSignal.timeout(SPOTIFY_HTTP_TIMEOUT_MS) });
+  const profile = await fetchSpotifyProfile(accessToken);
   if (!profile) throw new Error("owner profile unavailable");
   ownerSpotifyUserId = profile.id;
   return profile.id;

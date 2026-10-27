@@ -42,3 +42,11 @@ Log de `err` no erro de token (1), refresh token no aviso de rotação do dono (
 - Lua de UNLINK, `SET NX/XX` e `GETDEL` nunca rodaram em Upstash real (só REST falso); `/v1/me` real não visto (campos `id`/`display_name` assumidos).
 - Índice órfão se o processo morrer entre o SET NX e o ponteiro (a conta fica presa; resolvido por `driver:purge`); ordem link, depois blob: falha ao gravar o blob deixa o link do motorista.
 - Corrida entre instâncias e `AbortSignal.timeout` real; smoke em preview e PWA; qa/security-review da rodada 2.
+
+## Rodada 3 (B4, B5, B2 só doc)
+- B4: `deleteSpotifyBlob` e `purgeDriverData` (Upstash) apagam o blob (e endereços, no purge) primeiro; depois `unlinkAccount` e, por último, o ponteiro (retry possível). `revokeDriver` herda a ordem. Teste com UNLINK falhando em delete, purge e revoke: blob apagado, erro genérico, ponteiro mantido. Testes de ordem dos comandos atualizados.
+- B5: `getOwnerSpotifyUserId(env)` usa o `env` do callback e `AbortSignal.timeout(5000)` no refresh do dono (o `/me` já tinha). Teste: refresh do dono que nunca responde, callback 502 sem travar, nada gravado, sem log; teste de `env` sem `SPOTIFY_REFRESH_TOKEN` (process.env tem) pula a checagem.
+- B2 (doc): `docs/procedimentos/custodia-token-spotify.md` diz que órfão sem ponteiro não é liberado por purge, descreve a limpeza manual (apagar a chave do índice no Upstash; comando futuro é débito) e registra M1, B1, B3, B6 como limites aceitos.
+- Testes: `npm test && npm run typecheck && npm run lint && npm run build`: 49 arquivos passaram, 1 ignorado; 857 passaram, 4 ignorados, 0 falharam (854 antes); typecheck 0 erros, lint limpo, build ok.
+- Mutações executadas: liberar o link antes de apagar o token em delete (1 falhou) e em purge (3 falharam); sem timeout no refresh do dono (1 falhou); `process.env` no lugar do `env` (1 falhou). Todas revertidas.
+- Desvios: nenhum. Não verificado: ordem real dos comandos e falha do Lua em Upstash real; limpeza manual do órfão não foi exercida.

@@ -21,7 +21,7 @@ const blobFor = (id: string) => encryptToken("rt-" + id, Buffer.from(TEST_ENC_KE
 afterEach(() => vi.unstubAllGlobals());
 
 /** Fake Upstash REST (real SDK on top): strings with TTL (virtual clock), GETDEL, DEL, SET EX, EVAL for revoke. */
-function fakeUpstash(clock: { t: number }) {
+function fakeUpstash(clock: { t: number }, opts: { failEval?: boolean } = {}) {
   const kv = new Map<string, { v: string; exp?: number }>();
   const hashes = new Map<string, Record<string, string>>();
   const commands: string[][] = [];
@@ -67,6 +67,7 @@ function fakeUpstash(clock: { t: number }) {
           return reply(n);
         }
         case "eval": {
+          if (opts.failEval && r[0] === UNLINK_SCRIPT) return new Response(JSON.stringify({ error: "ERR boom" }), { status: 500 });
           if (r[0] === UNLINK_SCRIPT) {
             const e = live(r[2]);
             if (e && e.v === r[3]) {
@@ -282,6 +283,23 @@ describe("upstash specifics (wire level)", () => {
     expect(f.commands.filter((c) => c[1] === `${P}spotify-index:acc-wire` && c[0].toLowerCase() === "set")).toHaveLength(1);
   });
 
+  it("a failing release of the account link never keeps the token: blob first, then the link; the error stays generic and a retry finishes", async () => {
+    for (const how of ["delete", "purge", "revoke"] as const) {
+      const clock = { t: 1_000_000 };
+      const f = fakeUpstash(clock, { failEval: true });
+      const store = new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok"), P, () => clock.t);
+      f.kv.set(`${P}spotify:${A}`, { v: blobFor(A) });
+      f.kv.set(`${P}spotify-account:${A}`, { v: "acc-keep" });
+      f.kv.set(`${P}spotify-index:acc-keep`, { v: A });
+      const op = () => (how === "delete" ? store.deleteSpotifyBlob(A) : how === "purge" ? store.purgeDriverData(A) : store.revokeDriver(A));
+      const err = await op().catch((e: unknown) => e);
+      expect(f.kv.has(`${P}spotify:${A}`), how).toBe(false); // the token is gone although the release failed
+      if (how !== "revoke") expect(err).toBeInstanceOf(DriverStoreUnavailableError);
+      if (err instanceof Error) expect(err.message + String(err.cause ?? "")).not.toMatch(/boom|ERR/);
+      expect(f.kv.has(`${P}spotify-account:${A}`)).toBe(true); // pointer kept, so the release can be retried
+    }
+  });
+
   it("release goes through the compare-and-delete script with the driver as ARGV: a stale pointer never frees another driver's link", async () => {
     const clock = { t: 1_000_000 };
     const f = fakeUpstash(clock);
@@ -331,8 +349,9 @@ describe("upstash specifics (wire level)", () => {
     const store = new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok"), P, () => clock.t);
     await store.purgeDriverData(A);
     expect(f.commands).toEqual([
+      ["del", `${P}spotify:${A}`, `${P}driver-addr:${A}`], // the token and addresses go first
       ["get", `${P}spotify-account:${A}`], // no linked account: nothing to release
-      ["del", `${P}spotify:${A}`, `${P}driver-addr:${A}`, `${P}spotify-account:${A}`],
+      ["del", `${P}spotify-account:${A}`],
     ]);
   });
 });

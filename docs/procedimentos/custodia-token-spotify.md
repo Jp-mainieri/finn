@@ -35,11 +35,19 @@ No painel do Spotify (dono), cadastrar, byte a byte, a URI de cada ambiente e us
 
 ## Uma conta do Spotify, um motorista
 
-Depois da troca do `code`, o callback consulta `GET /v1/me` e grava `spotify-index:<spotifyUserId>` → `driverId` (`SET NX`; ponteiro inverso em `spotify-account:<driverId>`). Recusa (página de erro genérica, nada gravado) a conta do dono (a do `SPOTIFY_REFRESH_TOKEN`) e qualquer conta já ligada a outro motorista. O mesmo motorista pode reconectar; trocar de conta libera a ligação anterior dele. `DELETE /api/spotify/connection`, `driver:purge` e `driver:revoke` liberam a ligação do motorista (e só a dele): a conta volta a poder ser usada por outro. Se uma conta ficou presa por engano (motorista já revogado antes desta versão, por exemplo), rode `driver:purge` desse motorista.
+Depois da troca do `code`, o callback consulta `GET /v1/me` e grava `spotify-index:<spotifyUserId>` → `driverId` (`SET NX`; ponteiro inverso em `spotify-account:<driverId>`). Recusa (página de erro genérica, nada gravado) a conta do dono (a do `SPOTIFY_REFRESH_TOKEN`) e qualquer conta já ligada a outro motorista. O mesmo motorista pode reconectar; trocar de conta libera a ligação anterior dele. `DELETE /api/spotify/connection`, `driver:purge` e `driver:revoke` liberam a ligação do motorista (e só a dele): a conta volta a poder ser usada por outro. Nas três operações o token é apagado **primeiro** e a ligação é liberada depois: uma falha ao liberar a ligação nunca deixa o token para trás (a operação devolve erro genérico e pode ser repetida).
+
+**Conta presa.** `driver:purge` (e `driver:revoke`) liberam a conta pelo ponteiro inverso `spotify-account:<driverId>`. Um índice órfão **sem ponteiro** NÃO é liberado por nenhum comando: acontece se o processo morrer entre o `SET NX` e a gravação do ponteiro, ou com dois callbacks paralelos do mesmo motorista com contas diferentes. Limpeza manual do dono: no painel do Upstash do ambiente, confirmar que a chave `finn:<env>:spotify-index:<spotifyUserId em minúsculas>` guarda o `driverId` esperado e apagar só essa chave (o motorista então conecta de novo). Um comando do script para isso é débito futuro; não existe hoje.
 
 O dono (id legado, `FINN_API_TOKEN`) usa o token do servidor: `GET /connection` responde `connected` conforme `SPOTIFY_REFRESH_TOKEN` existir, `POST /connect` responde 403. Um dono que entre por convite tem id comum e usa o fluxo normal.
 
 ## Limites conhecidos
+
+Aceitos (decididos pelo dono, sem CAS em EVAL por enquanto):
+- **M1**: uma reconexão feita durante um refresh em voo pode perder para a gravação do token rotacionado da conta antiga (só se o Spotify rotacionar o refresh token; hipótese não observada). O motorista reconecta.
+- **B1**: um `revoke` que chega durante a troca do `code` pode deixar blob e ligação de um motorista já revogado; `driver:purge` ou `driver:revoke` de novo limpa.
+- **B3**: um `DELETE` em corrida com o callback do mesmo motorista pode deixar blob sem ligação. Repetir o `DELETE`.
+- **B6**: `SPOTIFY_REDIRECT_URI` só é obrigatória com `VERCEL_ENV=production`; em preview e desenvolvimento vale a origem da requisição.
 
 - Rate limit de `connect`: 10 por 600 s por motorista (contador no Redis).
 - O `state` do OAuth vale 600 s e um uso só. Se o motorista demorar, toca em "Conectar Spotify" de novo.

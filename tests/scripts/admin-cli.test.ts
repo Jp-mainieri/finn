@@ -380,7 +380,10 @@ describe("owner CLI: Spotify token custody (delivery 4)", () => {
         createStore: (e: string) => new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "t"), keyPrefix(e)),
       });
       expect(rc).toBe(0);
-      expect(seen.at(-1)).toEqual(["del", `finn:preview:spotify:${id}`, `finn:preview:driver-addr:${id}`, `finn:preview:spotify-account:${id}`]);
+      expect(seen.filter((c) => c[0] === "del")).toEqual([
+        ["del", `finn:preview:spotify:${id}`, `finn:preview:driver-addr:${id}`],
+        ["del", `finn:preview:spotify-account:${id}`],
+      ]);
     } finally {
       vi.unstubAllGlobals();
     }

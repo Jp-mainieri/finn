@@ -1,6 +1,6 @@
 # Contrato — custódia do refresh token do Spotify (etapa 1, entrega 4)
 
-Status: **rascunho, aguardando aprovação do dono** (2026-10-27). Base: [`identidade-e-perfil.md`](./identidade-e-perfil.md) e [`isolamento-por-motorista.md`](./isolamento-por-motorista.md). Fecha o M1 da entrega 3 (token de convidado sem vínculo com o `driverId`) e a exposição do token na URL, no `localStorage` e em cookie.
+Status: **aprovado pelo dono em 2026-10-27** (com as 3 decisões embutidas). Base: [`identidade-e-perfil.md`](./identidade-e-perfil.md) e [`isolamento-por-motorista.md`](./isolamento-por-motorista.md). Fecha o M1 da entrega 3 (token de convidado sem vínculo com o `driverId`) e a exposição do token na URL, no `localStorage` e em cookie.
 
 ## Objetivo
 
@@ -78,3 +78,4 @@ PWA (botão "Conectar Spotify", tela de convite, remoção do `localStorage` ant
 ## Histórico de mudanças
 
 - 2026-10-27: rascunho.
+- 2026-10-27: aprovado pelo dono, sem alterações.

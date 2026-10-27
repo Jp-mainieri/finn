@@ -144,6 +144,24 @@ describe("wazeAgent", () => {
     expect(client.calls[0].messages[0].content).not.toContain("Contexto deste turno");
   });
 
+  it.each([
+    [{ pendingLabel: "../../etc" }],
+    [{ pendingLabel: { toString: "x" } }],
+    [{ pendingLabel: ["casa"] }],
+    [{ awaitingDestination: "true" }],
+    [{ driverId: "drv_legacy_owner_000000000" }],
+    [[{ pendingLabel: "casa" }]],
+    ["casa"],
+    [42],
+    [null],
+  ])("ignores a hostile continuation %j (no turn context, nothing saved)", async (hostile) => {
+    const client = useModel(navigateScript("Shopping Iguatemi"));
+    const res = await handle("me leva pro Shopping Iguatemi", hostile);
+    expect(client.calls[0].messages[0].content).not.toContain("Contexto deste turno");
+    expect(res.toolCalls[0].result).toEqual({ navigating_to: "Shopping Iguatemi" });
+    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID).get("casa")).toBeUndefined();
+  });
+
   it("speaks a fallback when the model ends the turn without text", async () => {
     useModel((req) =>
       req.messages.at(-1)?.role === "tool" ? textMessage("") : toolCallMessage("navigate_to", { destination: "trabalho" }),

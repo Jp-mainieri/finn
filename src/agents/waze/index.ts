@@ -83,6 +83,7 @@ export const wazeAgent: Agent = {
   card: wazeAgentCard,
 
   handle: async (input) => {
+    // Closed list: anything that is not exactly a known shape is ignored (the client can send anything).
     const continuation = parseContinuation(input.continuation);
     // The book belongs to input.driverId (server-proven). driverContext.savedAddresses is ignored.
     // A configuration or store failure is a short spoken failure, never a fall back to another book,
@@ -106,7 +107,8 @@ export const wazeAgent: Agent = {
       systemPrompt: buildSystemPrompt(continuation),
       tools: WAZE_TOOLS,
       executors: { navigate_to: navigateTo },
-      input,
+      // Only the strictly parsed continuation travels on: hostile shapes were dropped above.
+      input: { ...input, continuation },
       fallbackErrorSpeech: "Não consegui definir a rota agora.",
       fastSpeech: wazeFastSpeech,
       deterministicFallback: async (taskInput) => {

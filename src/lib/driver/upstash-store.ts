@@ -23,6 +23,7 @@ export interface RedisLike {
   hset(key: string, value: Record<string, string>): Promise<unknown>;
   sadd(key: string, member: string): Promise<unknown>;
   smembers(key: string): Promise<unknown>;
+  get(key: string): Promise<unknown>;
   eval(script: string, keys: string[], args: string[]): Promise<unknown>;
 }
 
@@ -239,6 +240,16 @@ export class UpstashDriverStore implements DriverStore {
     const n = await this.call(() => this.redis.eval(RATELIMIT_SCRIPT, [redisKey], [String(windowSeconds)]));
     // Missing/non-numeric reply (e.g. null from an aborted request) must never read as "0 hits".
     if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 1) throw new DriverStoreUnavailableError();
+    return n;
+  }
+
+  async peekRateLimit(key: string): Promise<number> {
+    const redisKey = keys.rateLimit(this.prefix, key);
+    const raw = await this.call(() => this.redis.get(redisKey));
+    if (raw === null || raw === undefined) return 0;
+    // automaticDeserialization is off: a string. A number is tolerated; anything else must never read as "0 hits".
+    const n = typeof raw === "string" && /^\d{1,15}$/.test(raw) ? Number(raw) : typeof raw === "number" ? raw : NaN;
+    if (!Number.isSafeInteger(n) || n < 0) throw new DriverStoreUnavailableError();
     return n;
   }
 }

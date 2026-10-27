@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import type { AgentId, AgentResult } from "@/lib/contracts/a2a";
+import type { A2APublicResult, AgentId, AgentResult } from "@/lib/contracts/a2a";
 import type { ClientAction, OpenUrlAction, OrchestratorResponse } from "@/lib/contracts/client-events";
 
 /** Things the driver must never hear (spec: "sem tecnicismo"). */
@@ -26,6 +26,17 @@ export function expectFriendlySpeech(speech: unknown, { maxChars = 200 } = {}): 
   expect(s.length, "speech must not be empty").toBeGreaterThan(0);
   expect(s.length, `speech too long for driving (${s.length} chars): "${s}"`).toBeLessThanOrEqual(maxChars);
   expect(technicalTermsIn(s), `technical terms in speech: "${s}"`).toEqual([]);
+}
+
+/** What an external A2A client may see: exactly { agent, status, speech } (no toolCalls, clientActions, continuation). */
+export function expectPublicResult(value: unknown, agent?: AgentId): asserts value is A2APublicResult {
+  expect(value).toBeTypeOf("object");
+  const r = value as A2APublicResult;
+  expect(Object.keys(r).sort()).toEqual(["agent", "speech", "status"]);
+  expect(["spotify", "waze"]).toContain(r.agent);
+  if (agent) expect(r.agent).toBe(agent);
+  expect(["completed", "input-required", "failed"]).toContain(r.status);
+  expect(r.speech).toBeTypeOf("string");
 }
 
 export function expectAgentResult(value: unknown, agent?: AgentId): asserts value is AgentResult {

@@ -1,4 +1,5 @@
 import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { boundedContinuation } from "@/lib/continuation";
 import type {
   A2AMessage,
   A2AResponse,
@@ -50,20 +51,28 @@ export async function handleA2ARequest(agent: Agent, request: Request): Promise<
   }
 
   const message = body.params?.message;
-  const transcript = message?.parts
-    ?.filter((p) => p.kind === "text")
-    .map((p) => p.text)
+  const parts = Array.isArray(message?.parts) ? message.parts : [];
+  const transcript = parts
+    .filter((p) => p?.kind === "text" && typeof p.text === "string")
+    .map((p) => (p as { text: string }).text)
     .join(" ")
     .trim();
   if (!transcript) return rpcError(body.id, -32602, "Invalid params: message needs a text part");
 
   // A follow-up to an `input-required` task carries the agent's state as { continuation } in a data part.
-  const continuation = message.parts
-    .filter((p) => p.kind === "data")
-    .map((p) => (p.data as { continuation?: unknown } | null)?.continuation)
-    .find((c) => c !== undefined);
+  // Untrusted and unsigned: at most 2 KB here, then parsed strictly by the agent (unknown shapes ignored).
+  // It never carries a driverId: the id is fixed below.
+  const continuation = boundedContinuation(
+    parts
+      .filter((p) => p?.kind === "data")
+      .map((p) => (p.data as { continuation?: unknown } | null)?.continuation)
+      .find((c) => c !== undefined),
+  );
 
-  const contextId = message.contextId ?? crypto.randomUUID();
+  const contextId =
+    typeof message?.contextId === "string" && message.contextId.length > 0 && message.contextId.length <= 128
+      ? message.contextId
+      : crypto.randomUUID();
   // FINN_A2A_TOKEN is the OWNER's credential: A2A always runs as the owner, explicitly. The id is
   // fixed here and never read from the body.
   const result = await agent.handle({ transcript, contextId, continuation, driverId: LEGACY_OWNER_DRIVER_ID });
@@ -81,7 +90,12 @@ export async function handleA2ARequest(agent: Agent, request: Request): Promise<
     contextId,
     status: { state: result.status, message: reply },
     artifacts: [
-      { artifactId: crypto.randomUUID(), name: "result", parts: [{ kind: "data", data: result }] },
+      {
+        artifactId: crypto.randomUUID(),
+        name: "result",
+        // Only these three fields leave the server (see A2APublicResult).
+        parts: [{ kind: "data", data: { agent: result.agent, status: result.status, speech: result.speech } }],
+      },
     ],
   };
   return { jsonrpc: "2.0", id: body.id, result: task };

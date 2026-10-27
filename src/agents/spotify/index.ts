@@ -169,7 +169,8 @@ export const spotifyAgent: Agent = {
       systemPrompt: SPOTIFY_SYSTEM_PROMPT,
       tools: SPOTIFY_TOOLS,
       executors: spotifyExecutors,
-      input,
+      // The spotify-agent never asks a follow-up: any continuation from the client is dropped.
+      input: { ...input, continuation: undefined },
       fallbackErrorSpeech: UNREACHABLE_SPEECH,
       fastSpeech: spotifyFastSpeech,
       deterministicFallback: spotifyDeterministicFallback,

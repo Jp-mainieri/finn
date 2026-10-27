@@ -152,6 +152,17 @@ export interface A2ASendRequest {
   params: { message: A2AMessage };
 }
 
+/**
+ * What an EXTERNAL A2A client receives as artifact `result`: no `toolCalls` (arguments and results carry
+ * addresses and URIs) and no `clientActions` (deep links carry the address). The in-process `AgentResult`
+ * keeps both for the PWA through the orchestrator.
+ */
+export interface A2APublicResult {
+  agent: AgentId;
+  status: TaskState;
+  speech: string;
+}
+
 export interface A2ATask {
   kind: "task";
   id: string;
@@ -160,7 +171,7 @@ export interface A2ATask {
   artifacts: {
     artifactId: string;
     name: "result";
-    parts: [A2ADataPart<AgentResult>];
+    parts: [A2ADataPart<A2APublicResult>];
   }[];
 }
 

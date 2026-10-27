@@ -33,6 +33,8 @@ export interface DriverStore {
   revokeInvite(code: string): Promise<boolean>;
   /** Increments a counter scoped by `key` and returns the new value; TTL set on first hit of the window. */
   incrementRateLimit(key: string, windowSeconds: number): Promise<number>;
+  /** Current value of a counter without changing it (0 when absent or expired). Fail closed: errors propagate. */
+  peekRateLimit(key: string): Promise<number>;
 }
 
 const DRIVER_ID_RE = /^drv_[A-Za-z0-9_-]{22}$/;

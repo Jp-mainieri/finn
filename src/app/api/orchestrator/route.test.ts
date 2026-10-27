@@ -65,4 +65,13 @@ describe("POST /api/orchestrator driver identity", () => {
     expect(h.seen[0].driverContext).toEqual({ spotifyRefreshToken: "cookie-rt" });
     expect(JSON.stringify(h.seen[0])).not.toContain("Rua X");
   });
+
+  it("a continuation over 2 KB is ignored; one within the limit is passed on (the agent parses it strictly)", async () => {
+    await post({ transcript: "oi me leva", continuation: { agent: "waze", state: { pendingLabel: "casa", pad: "x".repeat(3000) } } });
+    expect(h.seen.length).toBeGreaterThan(0);
+    for (const input of h.seen) expect(input.continuation).toBeUndefined();
+    h.seen.length = 0;
+    await post({ transcript: "Rua A, 1", continuation: { agent: "waze", state: { pendingLabel: "casa" } } });
+    expect(h.seen.find((i) => i.continuation !== undefined)?.continuation).toEqual({ pendingLabel: "casa" });
+  });
 });

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryDriverStore, keyPrefix } from "@/lib/driver";
+import { encryptToken } from "@/lib/spotify/token-crypto";
 import { run, DEFAULT_DAYS } from "../../scripts/lib/admin-cli.mjs";
 
 const PEPPER = "c2b7d95e01f84a36b9d0e7a15c4f8823e6a91b07d3f5c8e24a0b69d1f7c3e5a8";
@@ -282,5 +283,105 @@ describe("owner CLI", () => {
       expect(h.err.join("\n")).toMatch(/não existe/);
       expect(h.created).toEqual([]);
     });
+  });
+});
+
+describe("owner CLI: Spotify token custody (delivery 4)", () => {
+  const blob = (id: string) =>
+    encryptToken("rt-" + id, Buffer.from("0123456789abcdef".repeat(4), "hex"), `${keyPrefix("test")}spotify:${id}`);
+
+  it("driver:revoke also deletes the stored Spotify token, and only that driver's", async () => {
+    const h = harness();
+    const a = await h.store.createDriver({ label: "Ana" });
+    const b = await h.store.createDriver({ label: "Bia" });
+    await h.store.setSpotifyBlob(a.driverId, blob(a.driverId));
+    await h.store.setSpotifyBlob(b.driverId, blob(b.driverId));
+    expect(await h.go(["driver:revoke", a.driverId, "--env", "preview", "--yes"])).toBe(0);
+    expect(await h.store.getSpotifyBlob(a.driverId)).toBeNull();
+    expect(await h.store.getSpotifyBlob(b.driverId)).not.toBeNull();
+    expect(h.all()).not.toContain("rt-");
+  });
+
+  it("revoking an already revoked driver still clears the token (idempotent)", async () => {
+    const h = harness();
+    const a = await h.store.createDriver({ label: "Ana" });
+    await h.store.revokeDriver(a.driverId);
+    await h.store.setSpotifyBlob(a.driverId, blob(a.driverId)); // e.g. a late rotation write
+    expect(await h.go(["driver:revoke", a.driverId, "--env", "preview", "--yes"])).toBe(0);
+    expect(await h.store.getSpotifyBlob(a.driverId)).toBeNull();
+  });
+
+  it("driver:purge: same guards as the others (--env, --confirm-production, no TTY needs --yes, confirmation)", async () => {
+    const h = harness({ tty: false });
+    const d = await h.store.createDriver({ label: "Ana" });
+    await h.store.setSpotifyBlob(d.driverId, blob(d.driverId));
+    expect(await h.go(["driver:purge", d.driverId])).toBe(2); // no --env
+    expect(await h.go(["driver:purge", d.driverId, "--env", "staging"])).toBe(2);
+    expect(await h.go(["driver:purge", d.driverId, "--env", "production"])).toBe(2); // no --confirm-production
+    expect(h.created).toEqual([]);
+    expect(await h.go(["driver:purge", d.driverId, "--env", "preview"])).toBe(1); // no TTY, no --yes
+    expect(h.err.join("\n")).toMatch(/--yes/);
+    expect(await h.store.getSpotifyBlob(d.driverId)).not.toBeNull();
+
+    const no = harness({ confirm: false });
+    const d2 = await no.store.createDriver({ label: "Bia" });
+    await no.store.setSpotifyBlob(d2.driverId, blob(d2.driverId));
+    expect(await no.go(["driver:purge", d2.driverId, "--env", "preview"])).toBe(1);
+    expect(no.confirm).toHaveBeenCalledTimes(1);
+    expect(await no.store.getSpotifyBlob(d2.driverId)).not.toBeNull();
+  });
+
+  it("driver:purge deletes token and addresses of that driver only, reports it, leaves the driver active", async () => {
+    const h = harness();
+    const a = await h.store.createDriver({ label: "Ana" });
+    const b = await h.store.createDriver({ label: "Bia" });
+    await h.store.setSpotifyBlob(a.driverId, blob(a.driverId));
+    await h.store.setSpotifyBlob(b.driverId, blob(b.driverId));
+    const purge = vi.spyOn(h.store, "purgeDriverData");
+    expect(await h.go(["driver:purge", a.driverId, "--env", "preview", "--yes"])).toBe(0);
+    expect(purge).toHaveBeenCalledExactlyOnceWith(a.driverId);
+    expect(await h.store.getSpotifyBlob(a.driverId)).toBeNull();
+    expect(await h.store.getSpotifyBlob(b.driverId)).not.toBeNull();
+    expect((await h.store.getDriver(a.driverId))!.status).toBe("active");
+    expect(h.out.join("\n")).toMatch(/apagados/);
+    expect(h.all()).not.toContain("rt-");
+  });
+
+  it("driver:purge refuses unknown and malformed ids without touching anything", async () => {
+    const h = harness();
+    const a = await h.store.createDriver({ label: "Ana" });
+    await h.store.setSpotifyBlob(a.driverId, blob(a.driverId));
+    const purge = vi.spyOn(h.store, "purgeDriverData");
+    for (const id of ["drv_nope", "../x", "drv_" + "Z".repeat(22)]) {
+      expect(await h.go(["driver:purge", id, "--env", "preview", "--yes"])).toBe(1);
+    }
+    expect(await h.go(["driver:purge", "--env", "preview", "--yes"])).toBe(2);
+    expect(purge).not.toHaveBeenCalled();
+    expect(await h.store.getSpotifyBlob(a.driverId)).not.toBeNull();
+  });
+
+  it("driver:purge with Redis credentials loaded through --env-file reaches only DEL of the two keys (real SDK, fake REST)", async () => {
+    const seen: string[][] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_u: unknown, init: RequestInit) => {
+      const cmd = (JSON.parse(init.body as string) as unknown[]).map(String);
+      seen.push(cmd);
+      if (cmd[0].toLowerCase() === "hgetall") return new Response(JSON.stringify({ result: ["driverId", "drv_" + "A".repeat(22), "label", "Ana", "status", "active", "tokenVersion", "1", "createdAt", "1"] }));
+      return new Response(JSON.stringify({ result: 1 }));
+    }));
+    try {
+      const { UpstashDriverStore, createRedisClient } = await import("@/lib/driver");
+      const id = "drv_" + "A".repeat(22);
+      const out: string[] = [];
+      const rc = await run(["driver:purge", id, "--env", "preview", "--yes"], {
+        env: { KV_REST_API_URL: "https://fake.upstash.example", KV_REST_API_TOKEN: "t" },
+        out: (x: string) => out.push(x),
+        err: () => {},
+        createStore: (e: string) => new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "t"), keyPrefix(e)),
+      });
+      expect(rc).toBe(0);
+      expect(seen.at(-1)).toEqual(["del", `finn:preview:spotify:${id}`, `finn:preview:driver-addr:${id}`]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

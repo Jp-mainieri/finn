@@ -21,12 +21,13 @@ const USAGE = `Uso: npm run <comando> -- --env production|preview|development [-
   invite:create --label <txt> [--max-uses N] [--days N]   imprime o código UMA vez (padrão: ${DEFAULT_MAX_USES} uso, ${DEFAULT_DAYS} dias)
   invite:revoke            (o código é pedido sem eco, ou vem por stdin; evite passá-lo em argv: fica no histórico e no ps)
   driver:list
-  driver:revoke <driverId> [--yes]
+  driver:revoke <driverId> [--yes]       revoga o motorista e apaga o token do Spotify guardado
+  driver:purge <driverId> [--yes]        apaga o token do Spotify e os endereços salvos do motorista (não revoga)
   driver:rotate <driverId> [--yes]
 
 --env é obrigatório e não tem padrão (define o prefixo finn:<env>:). Para production, --confirm-production também.
 --env-file <arquivo> carrega KV_REST_API_URL, KV_REST_API_TOKEN e FINN_INVITE_PEPPER do arquivo (variáveis já presentes no
-ambiente do processo têm precedência). Sem TTY, driver:revoke e driver:rotate exigem --yes.
+ambiente do processo têm precedência). Sem TTY, driver:revoke, driver:rotate e driver:purge exigem --yes.
 Use "npm run -s" para que o npm não imprima a linha de comando, e redirecione nada além do que precisa do código impresso.`;
 
 class UsageError extends Error {}
@@ -145,7 +146,7 @@ export async function run(argv, deps = {}) {
 
   try {
     const { command, flags, positional } = parseArgs(argv);
-    const commands = ["invite:create", "invite:revoke", "driver:list", "driver:revoke", "driver:rotate"];
+    const commands = ["invite:create", "invite:revoke", "driver:list", "driver:revoke", "driver:rotate", "driver:purge"];
     if (!commands.includes(command)) throw new UsageError(command ? `Comando desconhecido: ${command}` : "Comando ausente.");
 
     if (!flags.env) throw new UsageError("Recusado: --env é obrigatório (production, preview ou development). Não há padrão.");
@@ -195,7 +196,7 @@ export async function run(argv, deps = {}) {
       return 0;
     }
 
-    // driver:revoke / driver:rotate
+    // driver:revoke / driver:rotate / driver:purge
     if (positional.length !== 1) throw new UsageError(`Informe o driverId: ${command} <driverId>`);
     const id = positional[0];
     const driver = isValidDriverId(id) ? await store.getDriver(id) : null;
@@ -209,10 +210,17 @@ export async function run(argv, deps = {}) {
       return 1;
     }
     if (command === "driver:revoke" && driver.status === "revoked") {
-      out("Já estava revogado. Nada a fazer.");
+      // Idempotent: revoking again only makes sure the stored Spotify token is gone.
+      await store.revokeDriver(driver.driverId);
+      out("Já estava revogado. O token do Spotify guardado foi apagado, se havia.");
       return 0;
     }
-    const verb = command === "driver:revoke" ? "REVOGAR este motorista (o token dele deixa de valer)" : "ROTACIONAR as sessões deste motorista (todos os tokens antigos deixam de valer)";
+    const verb =
+      command === "driver:revoke"
+        ? "REVOGAR este motorista (o token dele deixa de valer e o token do Spotify guardado é apagado)"
+        : command === "driver:purge"
+          ? "APAGAR o token do Spotify e os endereços salvos deste motorista (ele terá de conectar o Spotify de novo)"
+          : "ROTACIONAR as sessões deste motorista (todos os tokens antigos deixam de valer)";
     if (!flags.yes && !isTTY) {
       err("Recusado: sem terminal interativo é preciso passar --yes para confirmar. Nada foi alterado.");
       return 1;
@@ -222,8 +230,15 @@ export async function run(argv, deps = {}) {
       return 1;
     }
     if (command === "driver:revoke") await store.revokeDriver(driver.driverId);
+    else if (command === "driver:purge") await store.purgeDriverData(driver.driverId);
     else await store.rotateSessions(driver.driverId);
-    out(command === "driver:revoke" ? "Motorista revogado." : "Sessões rotacionadas.");
+    out(
+      command === "driver:revoke"
+        ? "Motorista revogado. Token do Spotify guardado apagado."
+        : command === "driver:purge"
+          ? "Token do Spotify e endereços salvos apagados."
+          : "Sessões rotacionadas.",
+    );
     return 0;
   } catch (e) {
     if (e instanceof UsageError) {

@@ -17,6 +17,7 @@
     "driver:list": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --import ./scripts/lib/register-ts.mjs scripts/driver-admin.mjs driver:list",
     "driver:revoke": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --import ./scripts/lib/register-ts.mjs scripts/driver-admin.mjs driver:revoke",
     "driver:rotate": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --import ./scripts/lib/register-ts.mjs scripts/driver-admin.mjs driver:rotate",
+    "driver:purge": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-transform-types --import ./scripts/lib/register-ts.mjs scripts/driver-admin.mjs driver:purge",
     "smoke:session": "node tests/smoke/session.mjs"
   },
   "dependencies": {

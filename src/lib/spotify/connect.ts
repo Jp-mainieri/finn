@@ -8,10 +8,11 @@
  * - connection: connected or not; disconnect.
  * Nothing here logs; errors from the SDK, Spotify and decryption are neither logged nor passed on.
  */
-import { authorizeDriver } from "@/lib/auth";
+import { authorizeDriver, LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
 import { getDriverStore, type DriverStore } from "@/lib/driver";
-import { evictSpotifyAccessToken, exchangeAuthorizationCode } from "./auth";
-import { buildAuthorizeUrl, escapeHtml, htmlPage, OAUTH_STATE_COOKIE, redirectUriFor } from "./oauth";
+import { evictSpotifyAccessToken, exchangeAuthorizationCode, getOwnerSpotifyUserId } from "./auth";
+import { buildAuthorizeUrl, escapeHtml, htmlPage, isDevelopmentFlow, OAUTH_STATE_COOKIE, redirectUriFor } from "./oauth";
+import { fetchSpotifyProfile } from "./profile";
 import { deleteSpotifyRefreshToken, isTokenVaultEnabled, loadSpotifyRefreshToken, saveSpotifyRefreshToken } from "./token-vault";
 
 type Env = Record<string, string | undefined>;
@@ -31,11 +32,22 @@ export async function handleConnect(request: Request, deps: ConnectDeps = {}): P
   const env = deps.env ?? process.env;
   const auth = await authorizeDriver(request, deps.store ? { store: deps.store } : {});
   if (auth instanceof Response) return auth;
+  // The owner uses SPOTIFY_REFRESH_TOKEN of the server; a stored token for the owner id would be ignored.
+  if (auth.driverId === LEGACY_OWNER_DRIVER_ID) {
+    return Response.json({ error: "The owner does not connect Spotify here" }, { status: 403, headers: noStore });
+  }
 
   // Fail closed: without a valid key the connection flow is off and nothing is written or read.
   if (!isTokenVaultEnabled(env)) return unavailable();
   const clientId = env.SPOTIFY_CLIENT_ID;
   if (!clientId || !env.SPOTIFY_CLIENT_SECRET) return unavailable();
+
+  let redirectUri: string;
+  try {
+    redirectUri = redirectUriFor(request, env); // required in production
+  } catch {
+    return unavailable();
+  }
 
   let state: string;
   try {
@@ -51,7 +63,7 @@ export async function handleConnect(request: Request, deps: ConnectDeps = {}): P
   } catch {
     return unavailable();
   }
-  return Response.json({ url: buildAuthorizeUrl(clientId, redirectUriFor(request), state) }, { headers: noStore });
+  return Response.json({ url: buildAuthorizeUrl(clientId, redirectUri, state) }, { headers: noStore });
 }
 
 /** The same page for every failure: it must not tell a probe why. */
@@ -76,12 +88,18 @@ export async function handleCallback(request: Request, deps: ConnectDeps = {}): 
   const state = params.get("state");
 
   // Development only: the owner generating SPOTIFY_REFRESH_TOKEN (login sets a cookie with the state).
-  if (env.NODE_ENV === "development" && state) {
+  if (isDevelopmentFlow(env) && state) {
     const expected = cookieValue(request, OAUTH_STATE_COOKIE);
     if (expected && expected === state) return devOwnerCallback(request, code, params.get("error"));
   }
 
   if (!isTokenVaultEnabled(env)) return failurePage(503);
+  let redirectUri: string;
+  try {
+    redirectUri = redirectUriFor(request, env); // production without SPOTIFY_REDIRECT_URI: nothing is consumed or stored
+  } catch {
+    return failurePage(503);
+  }
 
   // The state is consumed (single use, atomic) BEFORE anything else, so even a failed attempt burns it.
   let driverId: string | null = null;
@@ -101,11 +119,28 @@ export async function handleCallback(request: Request, deps: ConnectDeps = {}): 
   if (!driverId) return failurePage(400);
   if (params.get("error") || !code || code.length > MAX_CODE_LENGTH) return failurePage(400);
 
+  let label: string;
   try {
-    const { refresh_token: refreshToken } = await exchangeAuthorizationCode(code, redirectUriFor(request));
+    // The record must still point at a live, active driver (revoked, purged or unknown: nothing is stored);
+    // the owner id never gets a stored token.
+    if (driverId === LEGACY_OWNER_DRIVER_ID) return failurePage(400);
+    const driver = await store.getDriver(driverId);
+    if (!driver || driver.status !== "active") return failurePage(400);
+
+    const { refresh_token: refreshToken, access_token: accessToken } = await exchangeAuthorizationCode(code, redirectUri);
     if (!refreshToken) return failurePage(502);
+
+    // Whose Spotify account consented? Unknown account = refuse (fail closed).
+    const profile = await fetchSpotifyProfile(accessToken);
+    if (!profile) return failurePage(502);
+    const ownerId = await getOwnerSpotifyUserId(); // throws if the owner token exists but cannot be resolved
+    if (ownerId && ownerId === profile.id) return failurePage(400);
+    // One Spotify account belongs to one driver (SET NX); the same driver reconnecting is fine.
+    if ((await store.linkSpotifyAccount(driverId, profile.id)) === "conflict") return failurePage(400);
+
     // The owner of the token is the driverId of the SERVER state record, nothing else.
     await saveSpotifyRefreshToken(driverId, refreshToken, { store, env });
+    label = profile.label;
   } catch {
     return failurePage(502);
   }
@@ -113,7 +148,7 @@ export async function handleCallback(request: Request, deps: ConnectDeps = {}): 
 
   return htmlPage(
     "Spotify conectado",
-    "<p>Pronto! O Spotify está conectado. Volte ao Finn.</p>",
+    `<p>Pronto! O Spotify está conectado: <strong>${escapeHtml(label)}</strong>. Volte ao Finn.</p>`,
   );
 }
 
@@ -133,10 +168,14 @@ async function devOwnerCallback(request: Request, code: string | null, error: st
   }
 }
 
+const ownerConnected = (env: Env) => Boolean(env.SPOTIFY_REFRESH_TOKEN?.trim());
+
 /** GET /api/spotify/connection */
 export async function handleConnectionStatus(request: Request, deps: ConnectDeps = {}): Promise<Response> {
   const auth = await authorizeDriver(request, deps.store ? { store: deps.store } : {});
   if (auth instanceof Response) return auth;
+  // The owner is "connected" through the server token; the vault (and its key) are not involved.
+  if (auth.driverId === LEGACY_OWNER_DRIVER_ID) return Response.json({ connected: ownerConnected(deps.env ?? process.env) }, { headers: noStore });
   try {
     // A blob that does not decrypt reads as null: not connected.
     const token = await loadSpotifyRefreshToken(auth.driverId, deps);
@@ -151,9 +190,13 @@ export async function handleDisconnect(request: Request, deps: ConnectDeps = {})
   const auth = await authorizeDriver(request, deps.store ? { store: deps.store } : {});
   if (auth instanceof Response) return auth;
   try {
-    await deleteSpotifyRefreshToken(auth.driverId, deps);
+    await deleteSpotifyRefreshToken(auth.driverId, deps); // also releases this driver's Spotify account link
   } catch {
     return unavailable();
+  }
+  if (auth.driverId === LEGACY_OWNER_DRIVER_ID) {
+    // Only clears a residual blob; the server token stays, so the answer is the same as GET's.
+    return Response.json({ connected: ownerConnected(deps.env ?? process.env) }, { headers: noStore });
   }
   evictSpotifyAccessToken(auth.driverId);
   return Response.json({ connected: false }, { headers: noStore });

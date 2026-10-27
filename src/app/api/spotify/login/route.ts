@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   buildAuthorizeUrl,
   htmlPage,
+  isDevelopmentFlow,
   OAUTH_STATE_COOKIE,
   OAUTH_STATE_MAX_AGE_S,
   redirectUriFor,
@@ -14,7 +15,7 @@ import {
  * is closed (410) and touches neither Spotify nor Redis: drivers connect from inside the Finn.
  */
 export async function GET(request: NextRequest) {
-  if (process.env.NODE_ENV !== "development") {
+  if (!isDevelopmentFlow()) {
     return htmlPage("Conectar Spotify", "<p>Use o botão <strong>Conectar Spotify</strong> dentro do Finn.</p>", 410);
   }
   const clientId = process.env.SPOTIFY_CLIENT_ID;

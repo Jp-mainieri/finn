@@ -18,6 +18,8 @@ Trocar `FINN_TOKEN_ENC_KEY` invalida todos os tokens guardados (não há rotaç�
 
 ## Registrar a redirect URI no Spotify
 
+Em `VERCEL_ENV=production` a variável `SPOTIFY_REDIRECT_URI` é **obrigatória**: sem ela `connect` responde 503 e o callback falha fechado (não consome o `state`, não troca o `code`). Em preview e desenvolvimento, sem ela, vale a origem da requisição.
+
 No painel do Spotify (dono), cadastrar, byte a byte, a URI de cada ambiente e usá-la em `SPOTIFY_REDIRECT_URI` do mesmo ambiente, por exemplo `https://<dominio>/api/spotify/callback`. A mesma URI vai na autorização e na troca do `code`; se diferir, o Spotify recusa e o motorista vê a página de erro.
 
 ## Gerar o SPOTIFY_REFRESH_TOKEN do dono (só em desenvolvimento)
@@ -30,6 +32,12 @@ No painel do Spotify (dono), cadastrar, byte a byte, a URI de cada ambiente e us
 - **Apagar dados sem revogar**: `npm run -s driver:purge -- --env <ambiente> [--confirm-production] [--env-file <arquivo>] <driverId>`. Apaga `spotify:<id>` e `driver-addr:<id>` (token e endereços). O motorista segue ativo e conecta o Spotify de novo. Pede confirmação; sem terminal exige `--yes`. `--env` é obrigatório e produção exige `--confirm-production`.
 - **Desconectar (o próprio motorista)**: `DELETE /api/spotify/connection` com a sessão dele. Idempotente.
 - O cache de access token (memória) é apagado na instância que atendeu a desconexão; em outras instâncias o access token já emitido vale até expirar (no máximo 1 hora). A revogação do motorista já bloqueia a sessão dele de imediato.
+
+## Uma conta do Spotify, um motorista
+
+Depois da troca do `code`, o callback consulta `GET /v1/me` e grava `spotify-index:<spotifyUserId>` → `driverId` (`SET NX`; ponteiro inverso em `spotify-account:<driverId>`). Recusa (página de erro genérica, nada gravado) a conta do dono (a do `SPOTIFY_REFRESH_TOKEN`) e qualquer conta já ligada a outro motorista. O mesmo motorista pode reconectar; trocar de conta libera a ligação anterior dele. `DELETE /api/spotify/connection`, `driver:purge` e `driver:revoke` liberam a ligação do motorista (e só a dele): a conta volta a poder ser usada por outro. Se uma conta ficou presa por engano (motorista já revogado antes desta versão, por exemplo), rode `driver:purge` desse motorista.
+
+O dono (id legado, `FINN_API_TOKEN`) usa o token do servidor: `GET /connection` responde `connected` conforme `SPOTIFY_REFRESH_TOKEN` existir, `POST /connect` responde 403. Um dono que entre por convite tem id comum e usa o fluxo normal.
 
 ## Limites conhecidos
 

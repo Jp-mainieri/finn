@@ -5,6 +5,7 @@
  * "not connected". Nothing here logs.
  */
 import { getDriverStore, isValidDriverId, keyPrefix, keys, type DriverStore } from "../driver";
+import { LEGACY_OWNER_DRIVER_ID } from "../auth";
 import { decryptToken, encryptToken, getTokenEncKey } from "./token-crypto";
 
 type Env = Record<string, string | undefined>;
@@ -45,6 +46,9 @@ function keyOrThrow(env: Env): Buffer {
 export async function saveSpotifyRefreshToken(driverId: string, refreshToken: string, deps: VaultDeps = {}): Promise<void> {
   const env = deps.env ?? process.env;
   if (!isValidDriverId(driverId) || typeof refreshToken !== "string" || !refreshToken) throw new Error("Invalid token input");
+  // The owner uses SPOTIFY_REFRESH_TOKEN of the server: a blob under the legacy id would be ignored and misleading
+  // (this also covers states issued before the owner was refused at /connect).
+  if (driverId === LEGACY_OWNER_DRIVER_ID) throw new Error("The owner has no stored token");
   const key = keyOrThrow(env);
   const blob = encryptToken(refreshToken, key, tokenAad(driverId, env));
   await (deps.store ?? getDriverStore()).setSpotifyBlob(driverId, blob);
@@ -58,6 +62,18 @@ export async function loadSpotifyRefreshToken(driverId: string, deps: VaultDeps 
   const blob = await (deps.store ?? getDriverStore()).getSpotifyBlob(driverId);
   if (blob === null) return null;
   return decryptToken(blob, key, tokenAad(driverId, env));
+}
+
+/**
+ * Re-stores a token ROTATED by Spotify, only while the driver's blob still exists (SET ... XX): a refresh that
+ * outlives a disconnect, revoke or purge must not bring the token back. False when it is gone. Throws when the vault is off.
+ */
+export async function saveRotatedSpotifyRefreshToken(driverId: string, refreshToken: string, deps: VaultDeps = {}): Promise<boolean> {
+  const env = deps.env ?? process.env;
+  if (!isValidDriverId(driverId) || driverId === LEGACY_OWNER_DRIVER_ID || !refreshToken) throw new Error("Invalid token input");
+  const key = keyOrThrow(env);
+  const blob = encryptToken(refreshToken, key, tokenAad(driverId, env));
+  return (deps.store ?? getDriverStore()).setSpotifyBlobIfExists(driverId, blob);
 }
 
 export async function deleteSpotifyRefreshToken(driverId: string, deps: VaultDeps = {}): Promise<void> {

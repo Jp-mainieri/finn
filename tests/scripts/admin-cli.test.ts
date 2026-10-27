@@ -360,12 +360,13 @@ describe("owner CLI: Spotify token custody (delivery 4)", () => {
     expect(await h.store.getSpotifyBlob(a.driverId)).not.toBeNull();
   });
 
-  it("driver:purge with Redis credentials loaded through --env-file reaches only DEL of the two keys (real SDK, fake REST)", async () => {
+  it("driver:purge with Redis credentials loaded through --env-file reaches only DEL of the driver's own keys (real SDK, fake REST)", async () => {
     const seen: string[][] = [];
     vi.stubGlobal("fetch", vi.fn(async (_u: unknown, init: RequestInit) => {
       const cmd = (JSON.parse(init.body as string) as unknown[]).map(String);
       seen.push(cmd);
       if (cmd[0].toLowerCase() === "hgetall") return new Response(JSON.stringify({ result: ["driverId", "drv_" + "A".repeat(22), "label", "Ana", "status", "active", "tokenVersion", "1", "createdAt", "1"] }));
+      if (cmd[0].toLowerCase() === "get") return new Response(JSON.stringify({ result: null })); // no linked account
       return new Response(JSON.stringify({ result: 1 }));
     }));
     try {
@@ -379,7 +380,7 @@ describe("owner CLI: Spotify token custody (delivery 4)", () => {
         createStore: (e: string) => new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "t"), keyPrefix(e)),
       });
       expect(rc).toBe(0);
-      expect(seen.at(-1)).toEqual(["del", `finn:preview:spotify:${id}`, `finn:preview:driver-addr:${id}`]);
+      expect(seen.at(-1)).toEqual(["del", `finn:preview:spotify:${id}`, `finn:preview:driver-addr:${id}`, `finn:preview:spotify-account:${id}`]);
     } finally {
       vi.unstubAllGlobals();
     }

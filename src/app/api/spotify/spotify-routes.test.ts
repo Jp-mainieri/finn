@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DriverStoreUnavailableError, MemoryDriverStore, setDriverStoreForTests, signSessionToken, type DriverStore } from "@/lib/driver";
 import { getAccessToken, resetSpotifyTokenCache } from "@/lib/spotify/auth";
-import { createFakeSpotify, json, OTHER_TEST_KEY, TEST_ENC_KEY, TOKEN_URL } from "@/lib/spotify/testing";
+import { createFakeSpotify, json, loggedText, OTHER_TEST_KEY, TEST_ENC_KEY, TOKEN_URL } from "@/lib/spotify/testing";
 import { loadSpotifyRefreshToken } from "@/lib/spotify/token-vault";
 import { GET as callbackGET } from "./callback/route";
 import { POST as connectPOST } from "./connect/route";
@@ -21,6 +21,10 @@ let store: MemoryDriverStore;
 let writes: unknown[][];
 let fake: ReturnType<typeof createFakeSpotify>;
 let exchangeMode: "ok" | "fail" | "no-refresh";
+let exchanges: number;
+/** What GET /v1/me answers for the access token of each code exchange (default: a new account per exchange). */
+let profiles: Map<string, { id: string; display_name?: string }>;
+let nextProfile: { id: string; display_name?: string } | undefined;
 
 /** The store as the routes see it: every call with its arguments recorded, like a spy on all Redis traffic. */
 function recorded(inner: MemoryDriverStore): DriverStore {
@@ -49,6 +53,8 @@ const callback = (qs: string, headers: Record<string, string> = {}) =>
 const status = (token?: string) => connectionGET(new Request("https://finn.test/api/spotify/connection", { headers: auth(token) }));
 const disconnect = (token?: string) => connectionDELETE(new Request("https://finn.test/api/spotify/connection", { method: "DELETE", headers: auth(token) }));
 
+const grantCalls = (grant: string) => fake.find("POST", TOKEN_URL).filter((c) => (c.body ?? "").includes(`grant_type=${grant}`));
+
 async function startConnect(token: string): Promise<string> {
   const res = await connect(token);
   expect(res.status).toBe(200);
@@ -56,18 +62,16 @@ async function startConnect(token: string): Promise<string> {
   return url.searchParams.get("state") as string;
 }
 
-const logged = () =>
-  JSON.stringify([
-    ...vi.mocked(console.error).mock.calls,
-    ...vi.mocked(console.warn).mock.calls,
-    ...vi.mocked(console.log).mock.calls,
-    ...vi.mocked(console.info).mock.calls,
-  ]);
+// Errors are expanded (JSON.stringify(new Error("x")) is "{}"): a logged `err` or `cause` cannot hide.
+const logged = () => loggedText([vi.mocked(console.error), vi.mocked(console.warn), vi.mocked(console.log), vi.mocked(console.info)]);
 
 beforeEach(() => {
   resetSpotifyTokenCache();
   writes = [];
   exchangeMode = "ok";
+  exchanges = 0;
+  profiles = new Map();
+  nextProfile = undefined;
   store = new MemoryDriverStore("finn:development:", () => Date.now());
   setDriverStoreForTests(recorded(store));
   vi.stubEnv("FINN_SESSION_SECRET", SESSION_SECRET);
@@ -78,13 +82,16 @@ beforeEach(() => {
   vi.stubEnv("SPOTIFY_REFRESH_TOKEN", "server-owner-rt");
   vi.stubEnv("NODE_ENV", "test");
   fake = createFakeSpotify({
+    me: (bearer) => (bearer ? (profiles.get(bearer) ?? { id: "owner-spotify-id", display_name: "Dono" }) : undefined),
     override: (c) => {
       if (c.url !== TOKEN_URL) return undefined;
       const form = new URLSearchParams(c.body ?? "");
       if (form.get("grant_type") !== "authorization_code") return undefined;
       if (exchangeMode === "fail") return json({ error: "invalid_grant", detail: RT }, 400);
       if (form.get("code") !== CODE || form.get("redirect_uri") !== REDIRECT) return json({ error: "invalid_grant" }, 400);
-      return json({ access_token: "access-x", token_type: "Bearer", expires_in: 3600, ...(exchangeMode === "ok" ? { refresh_token: RT } : {}) });
+      const accessToken = `access-ex-${++exchanges}`;
+      profiles.set(accessToken, nextProfile ?? { id: `spuser-${exchanges}`, display_name: `Perfil ${exchanges}` });
+      return json({ access_token: accessToken, token_type: "Bearer", expires_in: 3600, ...(exchangeMode === "ok" ? { refresh_token: RT } : {}) });
     },
   });
   vi.stubGlobal("fetch", vi.fn(fake.fetch));
@@ -214,7 +221,7 @@ describe("GET /api/spotify/callback", () => {
     const a = await newDriver("A");
     const state = await startConnect(a.token);
     expect((await callback(`code=${CODE}&state=${state}`)).status).toBe(200);
-    const exchanges = () => fake.find("POST", TOKEN_URL).length;
+    const exchanges = () => grantCalls("authorization_code").length;
     expect(exchanges()).toBe(1);
     const again = await callback(`code=${CODE}&state=${state}`);
     expect(again.status).toBe(400);
@@ -226,7 +233,7 @@ describe("GET /api/spotify/callback", () => {
     const state = await startConnect(a.token);
     const results = await Promise.all(Array.from({ length: 8 }, () => callback(`code=${CODE}&state=${state}`)));
     expect(results.filter((r) => r.status === 200)).toHaveLength(1);
-    expect(fake.find("POST", TOKEN_URL)).toHaveLength(1);
+    expect(grantCalls("authorization_code")).toHaveLength(1);
   });
 
   it("missing, unknown, malformed, expired and used states all get the very same error page", async () => {
@@ -253,7 +260,7 @@ describe("GET /api/spotify/callback", () => {
     vi.useRealTimers();
     expect(pages.size).toBe(1);
     expect([...pages][0]).not.toContain(RT);
-    expect(fake.find("POST", TOKEN_URL)).toHaveLength(1); // only the one good exchange
+    expect(grantCalls("authorization_code")).toHaveLength(1); // only the one good exchange
   });
 
   it("a Spotify 'error' still burns the state and shows the generic page without echoing the error", async () => {
@@ -372,7 +379,7 @@ describe("GET/DELETE /api/spotify/connection", () => {
     await callback(`code=${CODE}&state=${await startConnect(a.token)}`);
     await callback(`code=${CODE}&state=${await startConnect(b.token)}`);
     await getAccessToken({ driverId: a.id });
-    const refreshes = () => fake.find("POST", TOKEN_URL).filter((c) => (c.body ?? "").includes("grant_type=refresh_token")).length;
+    const refreshes = () => grantCalls("refresh_token").filter((c) => (c.body ?? "").includes(`refresh_token=${RT}`)).length;
     expect(refreshes()).toBe(1);
     for (let i = 0; i < 2; i++) {
       const res = await disconnect(a.token);

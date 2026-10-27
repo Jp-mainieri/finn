@@ -9,8 +9,27 @@ export const CALLBACK_PATH = "/api/spotify/callback";
  * Spotify rejects `localhost` for http URIs (use http://127.0.0.1:<port>),
  * and the value must match byte-for-byte in both the authorize and token calls.
  */
-export function redirectUriFor(request: Request): string {
-  return process.env.SPOTIFY_REDIRECT_URI || `${new URL(request.url).origin}${CALLBACK_PATH}`;
+export function redirectUriFor(request: Request, env: Record<string, string | undefined> = process.env): string {
+  const configured = env.SPOTIFY_REDIRECT_URI?.trim();
+  if (configured) return configured;
+  // In production the Host/origin of a request is not a safe source for a redirect_uri: it must be configured.
+  if (env.VERCEL_ENV === "production") throw new RedirectUriNotConfiguredError();
+  return `${new URL(request.url).origin}${CALLBACK_PATH}`;
+}
+
+export class RedirectUriNotConfiguredError extends Error {
+  constructor() {
+    super("SPOTIFY_REDIRECT_URI is required in production");
+    this.name = "RedirectUriNotConfiguredError";
+  }
+}
+
+/**
+ * The owner's local flow (login page, token shown by the callback): NODE_ENV=development AND no Vercel
+ * environment (or VERCEL_ENV=development, as `vercel dev` sets). Anything else is closed.
+ */
+export function isDevelopmentFlow(env: Record<string, string | undefined> = process.env): boolean {
+  return env.NODE_ENV === "development" && (!env.VERCEL_ENV || env.VERCEL_ENV === "development");
 }
 
 export function buildAuthorizeUrl(clientId: string, redirectUri: string, state: string): string {

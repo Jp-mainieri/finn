@@ -16,6 +16,8 @@ export interface FakeSpotifyOptions {
   pageSize?: number;
   /** Runs first; return a Response to override the default behavior for that call. */
   override?: (call: RecordedCall, index: number) => Response | undefined;
+  /** GET /v1/me: profile for the bearer token (default: the owner's account). */
+  me?: (bearer: string | null) => { id: string; display_name?: string } | undefined;
 }
 
 export const json = (data: unknown, status = 200) => Response.json(data, { status });
@@ -25,7 +27,7 @@ export function spotifyError(status: number, message: string, reason?: string): 
 }
 
 export function createFakeSpotify(opts: FakeSpotifyOptions = {}) {
-  const { playlists = [], pageSize = 50, override } = opts;
+  const { playlists = [], pageSize = 50, override, me = () => ({ id: "owner-spotify-id", display_name: "Dono" }) } = opts;
   const calls: RecordedCall[] = [];
   let tokens = 0;
 
@@ -46,6 +48,10 @@ export function createFakeSpotify(opts: FakeSpotifyOptions = {}) {
     const { origin, pathname, searchParams } = new URL(url);
     if (origin === "https://accounts.spotify.com" && pathname === "/api/token") {
       return json({ access_token: `access-${++tokens}`, token_type: "Bearer", expires_in: 3600 });
+    }
+    if (origin === "https://api.spotify.com" && pathname === "/v1/me") {
+      const profile = me((call.authorization ?? "").replace(/^Bearer /, "") || null);
+      return profile ? json(profile) : json({ error: { status: 401, message: "no" } }, 401);
     }
     if (origin === "https://api.spotify.com" && pathname === "/v1/me/playlists") {
       const offset = Number(searchParams.get("offset") ?? 0);
@@ -100,4 +106,19 @@ export async function useTestTokenVault(stubEnv: (name: string, value: string) =
     connect: (driverId: string, refreshToken: string) => saveSpotifyRefreshToken(driverId, refreshToken, { store }),
     restore: () => setDriverStoreForTests(undefined),
   };
+}
+
+/**
+ * Log sweep helper: JSON.stringify(new Error("x")) is "{}", so Error arguments are expanded (name, message, stack,
+ * cause) before serializing. Use it for every "nothing sensitive in console.*" assertion.
+ */
+export function flat(v: unknown): unknown {
+  if (v instanceof Error) return { name: v.name, message: v.message, stack: v.stack, cause: flat(v.cause) };
+  if (Array.isArray(v)) return v.map(flat);
+  return v;
+}
+
+/** Everything written through console.error/warn/log/info (spied with vi.spyOn), Errors expanded. */
+export function loggedText(spies: Array<{ mock: { calls: unknown[][] } }>): string {
+  return JSON.stringify(flat(spies.flatMap((s) => s.mock.calls)));
 }

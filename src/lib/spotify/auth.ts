@@ -1,7 +1,9 @@
 import { UserFacingError } from "@/lib/agent-runtime";
 import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
 import { MissingEnvError, requireEnv } from "@/lib/env";
-import { loadSpotifyRefreshToken, saveSpotifyRefreshToken, TokenVaultDisabledError } from "./token-vault";
+import { getDriverStore } from "@/lib/driver";
+import { fetchSpotifyProfile, SPOTIFY_HTTP_TIMEOUT_MS } from "./profile";
+import { loadSpotifyRefreshToken, saveRotatedSpotifyRefreshToken, TokenVaultDisabledError } from "./token-vault";
 
 export const SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token";
 export const SPOTIFY_AUTHORIZE_URL = "https://accounts.spotify.com/authorize";
@@ -32,19 +34,25 @@ const accessTokens = new Map<string, CachedToken>();
 const pendingRefresh = new Map<string, Promise<string>>();
 // Spotify may rotate the OWNER's server refresh token; keep the newest for this instance's lifetime.
 let ownerRotatedRefreshToken: string | undefined;
+// Bumped by evict: a refresh that started before it must not repopulate the cache (disconnect, reconnect).
+const epochs = new Map<string, number>();
+let ownerSpotifyUserId: string | undefined;
 const MAX_CACHED_DRIVERS = 200;
 
 /** Clears every in-memory access token (tests). */
 export function resetSpotifyTokenCache(): void {
   accessTokens.clear();
   pendingRefresh.clear();
+  epochs.clear();
   ownerRotatedRefreshToken = undefined;
+  ownerSpotifyUserId = undefined;
 }
 
 /** Forgets the cached access token of one driver (disconnect, reconnect). Other instances keep theirs until it expires (<= 1 h). */
 export function evictSpotifyAccessToken(driverId: string): void {
   accessTokens.delete(driverId);
   pendingRefresh.delete(driverId);
+  epochs.set(driverId, (epochs.get(driverId) ?? 0) + 1);
 }
 
 function spotifyEnv(name: string): string {
@@ -143,24 +151,34 @@ async function driverRefreshToken(driverId: string): Promise<string> {
 }
 
 async function refreshFor(driverId: string, signal?: AbortSignal): Promise<string> {
+  const epoch = epochs.get(driverId) ?? 0;
   const isOwner = driverId === LEGACY_OWNER_DRIVER_ID;
   // Owner: the server token, ignoring anything a client could send. Others: only their own blob, no fallback.
   const refreshToken = isOwner
     ? (ownerRotatedRefreshToken ?? spotifyEnv("SPOTIFY_REFRESH_TOKEN"))
     : await driverRefreshToken(driverId);
   const json = await requestToken({ grant_type: "refresh_token", refresh_token: refreshToken }, signal);
-  if (json.refresh_token && json.refresh_token !== refreshToken) {
-    if (isOwner) {
+  let stillConnected = true;
+  if (isOwner) {
+    if (json.refresh_token && json.refresh_token !== refreshToken) {
       ownerRotatedRefreshToken = json.refresh_token;
       console.warn("[spotify] refresh token was rotated; update SPOTIFY_REFRESH_TOKEN if it stops working");
-    } else {
-      try {
-        await saveSpotifyRefreshToken(driverId, json.refresh_token); // re-encrypted, fresh IV
-      } catch {
-        console.warn("[spotify] could not store a rotated refresh token");
+    }
+  } else {
+    try {
+      if (json.refresh_token && json.refresh_token !== refreshToken) {
+        // Re-encrypted with a fresh IV, and only if the blob still exists (SET XX): never resurrects a disconnected driver.
+        stillConnected = await saveRotatedSpotifyRefreshToken(driverId, json.refresh_token);
+      } else {
+        stillConnected = await getDriverStore().hasSpotifyBlob(driverId);
       }
+    } catch {
+      stillConnected = false; // cannot tell: hand out this access token but do not cache it
+      console.warn("[spotify] could not confirm or store the refresh token");
     }
   }
+  // Cache only if nothing evicted this driver meanwhile (disconnect, reconnect) and the connection still exists.
+  if (!stillConnected || (epochs.get(driverId) ?? 0) !== epoch) return json.access_token;
   if (accessTokens.size >= MAX_CACHED_DRIVERS && !accessTokens.has(driverId)) {
     const now = Date.now();
     for (const [k, v] of accessTokens) if (v.expiresAt <= now) accessTokens.delete(k);
@@ -191,10 +209,12 @@ export async function getAccessToken(opts: { driverId: string; forceRefresh?: bo
 
   let pending = pendingRefresh.get(driverId);
   if (!pending) {
-    pending = refreshFor(driverId, opts.signal).finally(() => {
-      pendingRefresh.delete(driverId);
+    const p: Promise<string> = refreshFor(driverId, opts.signal).finally(() => {
+      // Only the entry of THIS refresh: an evict may have let a newer one take the slot.
+      if (pendingRefresh.get(driverId) === p) pendingRefresh.delete(driverId);
     });
-    pendingRefresh.set(driverId, pending);
+    pending = p;
+    pendingRefresh.set(driverId, p);
   }
   return pending;
 }
@@ -204,5 +224,27 @@ export async function exchangeAuthorizationCode(
   code: string,
   redirectUri: string,
 ): Promise<TokenResponse> {
-  return requestToken({ grant_type: "authorization_code", code, redirect_uri: redirectUri });
+  try {
+    return await requestToken(
+      { grant_type: "authorization_code", code, redirect_uri: redirectUri },
+      AbortSignal.timeout(SPOTIFY_HTTP_TIMEOUT_MS),
+    );
+  } catch (err) {
+    if (err instanceof UserFacingError) throw err;
+    throw new UserFacingError(UNREACHABLE_SPEECH); // timeout or abort: generic, no detail kept
+  }
+}
+
+/**
+ * Spotify account id (lowercase) of the owner, from SPOTIFY_REFRESH_TOKEN, cached in memory once known.
+ * Null when the server has no owner token (the owner check is then skipped). Throws when the token exists but the
+ * lookup fails: callers fail closed.
+ */
+export async function getOwnerSpotifyUserId(): Promise<string | null> {
+  if (!process.env.SPOTIFY_REFRESH_TOKEN?.trim()) return null;
+  if (ownerSpotifyUserId) return ownerSpotifyUserId;
+  const profile = await fetchSpotifyProfile(await getAccessToken({ driverId: LEGACY_OWNER_DRIVER_ID }));
+  if (!profile) throw new Error("owner profile unavailable");
+  ownerSpotifyUserId = profile.id;
+  return profile.id;
 }

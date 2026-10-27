@@ -7,6 +7,7 @@ import {
   oauthStateHash,
   parseOAuthStateRecord,
   isValidDriverId,
+  isValidSpotifyUserId,
   keys,
   normalizeLabel,
   validateInviteInput,
@@ -29,7 +30,7 @@ export interface RedisLike {
   sadd(key: string, member: string): Promise<unknown>;
   smembers(key: string): Promise<unknown>;
   get(key: string): Promise<unknown>;
-  set(key: string, value: string, opts?: { ex: number }): Promise<unknown>;
+  set(key: string, value: string, opts?: { ex?: number; xx?: boolean; nx?: boolean }): Promise<unknown>;
   del(...keys: string[]): Promise<unknown>;
   getdel(key: string): Promise<unknown>;
   eval(script: string, keys: string[], args: string[]): Promise<unknown>;
@@ -64,6 +65,12 @@ if redis.call('EXISTS', KEYS[1]) == 1 and redis.call('HGET', KEYS[1], 'status') 
   redis.call('HINCRBY', KEYS[1], 'tokenVersion', 1)
   return 1
 end
+return 0
+`;
+
+// Deletes KEYS[1] only if it still holds ARGV[1] (never removes another driver's link).
+export const UNLINK_SCRIPT = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end
 return 0
 `;
 
@@ -210,10 +217,64 @@ export class UpstashDriverStore implements DriverStore {
     if (r !== "OK") throw new DriverStoreUnavailableError();
   }
 
+  async setSpotifyBlobIfExists(driverId: string, blob: string): Promise<boolean> {
+    assertSpotifyBlob(blob);
+    const key = keys.spotifyToken(this.prefix, driverId);
+    const r = await this.call(() => this.redis.set(key, blob, { xx: true }));
+    if (r === "OK") return true;
+    if (r === null || r === undefined) return false; // XX on a missing key
+    throw new DriverStoreUnavailableError();
+  }
+
+  async hasSpotifyBlob(driverId: string): Promise<boolean> {
+    return (await this.getSpotifyBlob(driverId)) !== null;
+  }
+
+  /** Releases the index entry this driver holds (compare-and-delete: never another driver's). */
+  private async unlinkAccount(driverId: string): Promise<void> {
+    const accKey = keys.spotifyAccount(this.prefix, driverId);
+    const uid = await this.call(() => this.redis.get(accKey));
+    if (uid === null || uid === undefined) return;
+    if (typeof uid !== "string") throw new DriverStoreUnavailableError();
+    if (!isValidSpotifyUserId(uid)) return; // garbage pointer: nothing safe to release (the pointer itself is deleted by the caller)
+    const r = await this.call(() => this.redis.eval(UNLINK_SCRIPT, [keys.spotifyIndex(this.prefix, uid)], [driverId]));
+    if (typeof r !== "number") throw new DriverStoreUnavailableError();
+  }
+
   async deleteSpotifyBlob(driverId: string): Promise<void> {
     if (!isValidDriverId(driverId)) return;
-    const r = await this.call(() => this.redis.del(keys.spotifyToken(this.prefix, driverId)));
+    await this.unlinkAccount(driverId);
+    const r = await this.call(() =>
+      this.redis.del(keys.spotifyToken(this.prefix, driverId), keys.spotifyAccount(this.prefix, driverId)),
+    );
     if (typeof r !== "number") throw new DriverStoreUnavailableError();
+  }
+
+  async linkSpotifyAccount(driverId: string, spotifyUserId: string): Promise<"linked" | "conflict"> {
+    const idxKey = keys.spotifyIndex(this.prefix, spotifyUserId); // validates both ids, outside call()
+    const accKey = keys.spotifyAccount(this.prefix, driverId);
+    const set = await this.call(() => this.redis.set(idxKey, driverId, { nx: true }));
+    if (set !== "OK") {
+      if (set !== null && set !== undefined) throw new DriverStoreUnavailableError();
+      const owner = await this.call(() => this.redis.get(idxKey));
+      if (typeof owner !== "string" && owner !== null && owner !== undefined) throw new DriverStoreUnavailableError();
+      if (owner !== driverId) return "conflict";
+    }
+    const old = await this.call(() => this.redis.get(accKey));
+    const w = await this.call(() => this.redis.set(accKey, spotifyUserId));
+    if (w !== "OK") throw new DriverStoreUnavailableError();
+    if (typeof old === "string" && old !== spotifyUserId && isValidSpotifyUserId(old)) {
+      await this.call(() => this.redis.eval(UNLINK_SCRIPT, [keys.spotifyIndex(this.prefix, old)], [driverId]));
+    }
+    return "linked";
+  }
+
+  async getLinkedDriver(spotifyUserId: string): Promise<string | null> {
+    if (!isValidSpotifyUserId(spotifyUserId)) return null;
+    const raw = await this.call(() => this.redis.get(keys.spotifyIndex(this.prefix, spotifyUserId)));
+    if (raw === null || raw === undefined) return null;
+    if (typeof raw !== "string") throw new DriverStoreUnavailableError();
+    return isValidDriverId(raw) ? raw : null;
   }
 
   async createOAuthState(driverId: string): Promise<string> {
@@ -238,8 +299,13 @@ export class UpstashDriverStore implements DriverStore {
 
   async purgeDriverData(driverId: string): Promise<void> {
     if (!isValidDriverId(driverId)) return;
+    await this.unlinkAccount(driverId);
     const r = await this.call(() =>
-      this.redis.del(keys.spotifyToken(this.prefix, driverId), keys.driverAddr(this.prefix, driverId)),
+      this.redis.del(
+        keys.spotifyToken(this.prefix, driverId),
+        keys.driverAddr(this.prefix, driverId),
+        keys.spotifyAccount(this.prefix, driverId),
+      ),
     );
     if (typeof r !== "number") throw new DriverStoreUnavailableError();
   }

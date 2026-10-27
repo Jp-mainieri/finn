@@ -2,6 +2,7 @@ import {
   OAUTH_STATE_TTL_SECONDS,
   assertPrefix,
   assertSpotifyBlob,
+  isValidSpotifyUserId,
   generateOAuthState,
   oauthStateHash,
   isValidDriverId,
@@ -28,6 +29,8 @@ export class MemoryDriverStore implements DriverStore {
   private drivers = new Map<string, Driver>();
   private invites = new Map<string, InviteRecord>();
   private blobs = new Map<string, string>();
+  private spotifyIndex = new Map<string, string>();
+  private spotifyAccount = new Map<string, string>();
   private states = new Map<string, { driverId: string; expiresAt: number }>();
   private counters = new Map<string, { n: number; resetAt: number }>();
 
@@ -53,6 +56,8 @@ export class MemoryDriverStore implements DriverStore {
       ...[...this.drivers.keys()].map((id) => keys.driver(this.prefix, id)),
       ...[...this.invites.keys()].map((h) => keys.invite(this.prefix, h)),
       ...[...this.blobs.keys()].map((id) => keys.spotifyToken(this.prefix, id)),
+      ...[...this.spotifyIndex.keys()].map((u) => keys.spotifyIndex(this.prefix, u)),
+      ...[...this.spotifyAccount.keys()].map((d) => keys.spotifyAccount(this.prefix, d)),
       ...[...this.states.keys()].map((h) => keys.oauthState(this.prefix, h)),
       ...[...this.counters.keys()].map((k) => keys.rateLimit(this.prefix, k)),
     ];
@@ -90,7 +95,7 @@ export class MemoryDriverStore implements DriverStore {
     if (!isValidDriverId(driverId)) return;
     const d = this.drivers.get(driverId);
     if (d) d.status = "revoked";
-    this.blobs.delete(driverId);
+    await this.deleteSpotifyBlob(driverId);
   }
 
   async getSpotifyBlob(driverId: string): Promise<string | null> {
@@ -104,8 +109,40 @@ export class MemoryDriverStore implements DriverStore {
     this.blobs.set(driverId, blob);
   }
 
+  async setSpotifyBlobIfExists(driverId: string, blob: string): Promise<boolean> {
+    assertSpotifyBlob(blob);
+    keys.spotifyToken(this.prefix, driverId);
+    if (!this.blobs.has(driverId)) return false;
+    this.blobs.set(driverId, blob);
+    return true;
+  }
+
+  async hasSpotifyBlob(driverId: string): Promise<boolean> {
+    return isValidDriverId(driverId) && this.blobs.has(driverId);
+  }
+
   async deleteSpotifyBlob(driverId: string): Promise<void> {
-    if (isValidDriverId(driverId)) this.blobs.delete(driverId);
+    if (!isValidDriverId(driverId)) return;
+    this.blobs.delete(driverId);
+    const uid = this.spotifyAccount.get(driverId);
+    if (uid !== undefined && this.spotifyIndex.get(uid) === driverId) this.spotifyIndex.delete(uid);
+    this.spotifyAccount.delete(driverId);
+  }
+
+  async linkSpotifyAccount(driverId: string, spotifyUserId: string): Promise<"linked" | "conflict"> {
+    keys.spotifyIndex(this.prefix, spotifyUserId);
+    keys.spotifyAccount(this.prefix, driverId);
+    const owner = this.spotifyIndex.get(spotifyUserId);
+    if (owner !== undefined && owner !== driverId) return "conflict";
+    this.spotifyIndex.set(spotifyUserId, driverId);
+    const old = this.spotifyAccount.get(driverId);
+    this.spotifyAccount.set(driverId, spotifyUserId);
+    if (old !== undefined && old !== spotifyUserId && this.spotifyIndex.get(old) === driverId) this.spotifyIndex.delete(old);
+    return "linked";
+  }
+
+  async getLinkedDriver(spotifyUserId: string): Promise<string | null> {
+    return isValidSpotifyUserId(spotifyUserId) ? (this.spotifyIndex.get(spotifyUserId) ?? null) : null;
   }
 
   async createOAuthState(driverId: string): Promise<string> {
@@ -125,7 +162,7 @@ export class MemoryDriverStore implements DriverStore {
   }
 
   async purgeDriverData(driverId: string): Promise<void> {
-    if (isValidDriverId(driverId)) this.blobs.delete(driverId);
+    await this.deleteSpotifyBlob(driverId);
   }
 
   async rotateSessions(driverId: string): Promise<void> {

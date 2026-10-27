@@ -9,6 +9,7 @@ import {
   keyPrefix,
   type DriverStore,
 } from "./index";
+import { UNLINK_SCRIPT } from "./upstash-store";
 import { encryptToken } from "../spotify/token-crypto";
 import { TEST_ENC_KEY } from "../spotify/testing";
 
@@ -38,8 +39,11 @@ function fakeUpstash(clock: { t: number }) {
       const reply = (result: unknown) => new Response(JSON.stringify({ result }), { status: 200 });
       switch (op.toLowerCase()) {
         case "set": {
-          const exI = r.findIndex((x, i) => i >= 2 && x.toUpperCase() === "EX");
-          kv.set(r[0], { v: r[1], exp: exI > 0 ? clock.t + Number(r[exI + 1]) * 1000 : undefined });
+          const flags = r.slice(2).map((x) => x.toUpperCase());
+          if (flags.includes("NX") && live(r[0])) return reply(null);
+          if (flags.includes("XX") && !live(r[0])) return reply(null);
+          const exI = flags.indexOf("EX");
+          kv.set(r[0], { v: r[1], exp: exI >= 0 ? clock.t + Number(flags[exI + 1]) * 1000 : undefined });
           return reply("OK");
         }
         case "sadd":
@@ -63,6 +67,14 @@ function fakeUpstash(clock: { t: number }) {
           return reply(n);
         }
         case "eval": {
+          if (r[0] === UNLINK_SCRIPT) {
+            const e = live(r[2]);
+            if (e && e.v === r[3]) {
+              kv.delete(r[2]);
+              return reply(1);
+            }
+            return reply(0);
+          }
           const n = Number(r[1]);
           const h = hashes.get(r[2]);
           if (n === 1 && h) h[r[2 + n]] = r[3 + n];
@@ -153,6 +165,65 @@ describe.each(setups)("oauth state and token blobs: $name", ({ make }) => {
     expect(await store.getSpotifyBlob(B)).not.toBeNull();
   });
 
+  it("rotated blob: only replaces an existing one (XX); a missing blob stays missing", async () => {
+    const { store } = make();
+    expect(await store.setSpotifyBlobIfExists(A, blobFor(A))).toBe(false);
+    expect(await store.getSpotifyBlob(A)).toBeNull();
+    expect(await store.hasSpotifyBlob(A)).toBe(false);
+    await store.setSpotifyBlob(A, blobFor(A));
+    const rotated = blobFor(A);
+    expect(await store.setSpotifyBlobIfExists(A, rotated)).toBe(true);
+    expect(await store.getSpotifyBlob(A)).toBe(rotated);
+    expect(await store.hasSpotifyBlob(A)).toBe(true);
+    await store.deleteSpotifyBlob(A);
+    expect(await store.setSpotifyBlobIfExists(A, blobFor(A))).toBe(false);
+    expect(await store.getSpotifyBlob(A)).toBeNull();
+    await expect(store.setSpotifyBlobIfExists(A, "plain-token")).rejects.toThrow();
+  });
+
+  it("account link: NX for a new account, ok for the same driver, conflict for another (nothing changes)", async () => {
+    const { store } = make();
+    expect(await store.linkSpotifyAccount(A, "acc-1")).toBe("linked");
+    expect(await store.linkSpotifyAccount(A, "acc-1")).toBe("linked");
+    expect(await store.linkSpotifyAccount(B, "acc-1")).toBe("conflict");
+    expect(await store.getLinkedDriver("acc-1")).toBe(A);
+    expect(await store.linkSpotifyAccount(B, "acc-2")).toBe("linked");
+    expect(await store.getLinkedDriver("acc-2")).toBe(B);
+    expect(await store.getLinkedDriver("nobody")).toBeNull();
+    expect(await store.getLinkedDriver("../x")).toBeNull();
+    await expect(store.linkSpotifyAccount(A, "UPPER")).rejects.toThrow();
+    await expect(store.linkSpotifyAccount("bad", "acc-3")).rejects.toThrow();
+  });
+
+  it("account link: a changed account releases only that driver's previous link; delete/purge release the current one, never another driver's", async () => {
+    const { store } = make();
+    await store.linkSpotifyAccount(A, "acc-a1");
+    await store.linkSpotifyAccount(B, "acc-b");
+    await store.linkSpotifyAccount(A, "acc-a2");
+    expect(await store.getLinkedDriver("acc-a1")).toBeNull();
+    expect(await store.getLinkedDriver("acc-a2")).toBe(A);
+    await store.deleteSpotifyBlob(A);
+    expect(await store.getLinkedDriver("acc-a2")).toBeNull();
+    expect(await store.getLinkedDriver("acc-b")).toBe(B);
+    await store.linkSpotifyAccount(A, "acc-a3");
+    await store.purgeDriverData(A);
+    expect(await store.getLinkedDriver("acc-a3")).toBeNull();
+    // stale pointer: B takes acc-a4 after A released it; A's later cleanup must not touch it
+    await store.linkSpotifyAccount(A, "acc-a4");
+    await store.deleteSpotifyBlob(A);
+    await store.linkSpotifyAccount(B, "acc-a4");
+    await store.deleteSpotifyBlob(A);
+    expect(await store.getLinkedDriver("acc-a4")).toBe(B);
+  });
+
+  it("revokeDriver releases the account link too", async () => {
+    const { store } = make();
+    const a = await store.createDriver({ label: "A" });
+    await store.linkSpotifyAccount(a.driverId, "acc-r");
+    await store.revokeDriver(a.driverId);
+    expect(await store.getLinkedDriver("acc-r")).toBeNull();
+  });
+
   it("revokeDriver deletes the driver's blob and only theirs", async () => {
     const { store } = make();
     const a = await store.createDriver({ label: "A" });
@@ -195,6 +266,36 @@ describe("upstash specifics (wire level)", () => {
     expect(JSON.stringify(f.commands)).not.toContain(state);
   });
 
+  it("wire: the rotated write is SET ... XX and the account link is SET ... NX (never a plain SET on the index)", async () => {
+    const clock = { t: 1_000_000 };
+    const f = fakeUpstash(clock);
+    const store = new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok"), P, () => clock.t);
+    await store.setSpotifyBlob(A, blobFor(A));
+    f.commands.length = 0;
+    await store.setSpotifyBlobIfExists(A, blobFor(A));
+    expect(f.commands[0][0].toLowerCase()).toBe("set");
+    expect(f.commands[0].slice(3).map((x) => x.toUpperCase())).toEqual(["XX"]);
+    f.commands.length = 0;
+    await store.linkSpotifyAccount(A, "acc-wire");
+    const idxSet = f.commands.find((c) => c[1] === `${P}spotify-index:acc-wire`);
+    expect(idxSet?.slice(3).map((x) => x.toUpperCase())).toEqual(["NX"]);
+    expect(f.commands.filter((c) => c[1] === `${P}spotify-index:acc-wire` && c[0].toLowerCase() === "set")).toHaveLength(1);
+  });
+
+  it("release goes through the compare-and-delete script with the driver as ARGV: a stale pointer never frees another driver's link", async () => {
+    const clock = { t: 1_000_000 };
+    const f = fakeUpstash(clock);
+    const store = new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok"), P, () => clock.t);
+    f.kv.set(`${P}spotify-account:${A}`, { v: "acc-stale" }); // A's pointer survived a crash...
+    f.kv.set(`${P}spotify-index:acc-stale`, { v: B }); // ...but the account now belongs to B
+    f.commands.length = 0;
+    await store.deleteSpotifyBlob(A);
+    const ev = f.commands.find((c) => c[0].toLowerCase() === "eval");
+    expect(ev?.slice(1)).toEqual([UNLINK_SCRIPT, "1", `${P}spotify-index:acc-stale`, A]);
+    expect(f.kv.get(`${P}spotify-index:acc-stale`)?.v).toBe(B);
+    expect(f.kv.has(`${P}spotify-account:${A}`)).toBe(false);
+  });
+
   it("a record older than the TTL is refused even if Redis kept it (defense in depth)", async () => {
     const clock = { t: 1_000_000 };
     const f = fakeUpstash(clock);
@@ -224,11 +325,14 @@ describe("upstash specifics (wire level)", () => {
     }
   });
 
-  it("purgeDriverData sends one DEL for spotify:<id> and driver-addr:<id> of that driver only", async () => {
+  it("purgeDriverData deletes spotify:<id>, driver-addr:<id> and the account pointer of that driver only", async () => {
     const clock = { t: 1 };
     const f = fakeUpstash(clock);
     const store = new UpstashDriverStore(createRedisClient("https://fake.upstash.example", "tok"), P, () => clock.t);
     await store.purgeDriverData(A);
-    expect(f.commands).toEqual([["del", `${P}spotify:${A}`, `${P}driver-addr:${A}`]]);
+    expect(f.commands).toEqual([
+      ["get", `${P}spotify-account:${A}`], // no linked account: nothing to release
+      ["del", `${P}spotify:${A}`, `${P}driver-addr:${A}`, `${P}spotify-account:${A}`],
+    ]);
   });
 });

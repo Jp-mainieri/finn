@@ -12,7 +12,7 @@ import {
   resetSpotifyTokenCache,
 } from "./auth";
 import { listPlaylists } from "./playlists";
-import { decryptToken } from "./token-crypto";
+import { decryptToken, encryptToken } from "./token-crypto";
 import { loadSpotifyRefreshToken, tokenAad } from "./token-vault";
 import { createFakeSpotify, json, stubSpotifyEnv, TEST_ENC_KEY, TOKEN_URL, useTestTokenVault } from "./testing";
 
@@ -89,7 +89,12 @@ describe("Spotify token isolation (non-owner never reaches the server token)", (
   });
 
   it("the owner ignores a blob stored under the owner id: the server token is used", async () => {
-    await vault.connect(OWNER.driverId, "owner-blob-token");
+    // a residual blob under the legacy id (the vault itself refuses to write one)
+    await expect(vault.connect(OWNER.driverId, "owner-blob-token")).rejects.toThrow();
+    await vault.store.setSpotifyBlob(
+      OWNER.driverId,
+      encryptToken("owner-blob-token", Buffer.from(TEST_ENC_KEY, "hex"), tokenAad(OWNER.driverId)),
+    );
     const fake = install();
     await getAccessToken({ ...OWNER });
     const bodies = tokenBodies(fake);

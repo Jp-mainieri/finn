@@ -119,7 +119,7 @@ const unavailable = () =>
   );
 
 /**
- * The single gate of the four AI routes. Call it right after `authorizeDriver` (and, for `live`, after the
+ * The single gate of the four AI routes. Burst is checked first and, when over, answers 429 without touching Redis; only requests it lets through count for the day. Call it right after `authorizeDriver` (and, for `live`, after the
  * ENABLE_GPT_LIVE check), BEFORE reading the body or calling any paid service. Returns an error Response
  * (429 or 503) or null when the request may proceed. Every call counts, including requests that turn out malformed.
  * Day counter down: a driver gets 503 (fail closed), the owner passes (fail open, day ceiling only; burst still applies).
@@ -135,7 +135,9 @@ export async function enforceAiLimit(cls: AiClass, driverId: string, deps: { sto
     return unavailable(); // never turn a bad id or class into a key: nothing is counted, nothing is called
   }
 
+  // Burst first: a request it stops never reaches Redis (no command spent, no day quota used).
   const b = burstHit(cls, driverId, now);
+  if (b.over) return tooMany(cls, "burst", b.retryAfter);
 
   let dayCount: number | null;
   try {
@@ -147,6 +149,5 @@ export async function enforceAiLimit(cls: AiClass, driverId: string, deps: { sto
   }
 
   if (dayCount !== null && dayCount > AI_LIMITS[cls].day) return tooMany(cls, "day", secondsToMidnight);
-  if (b.over) return tooMany(cls, "burst", b.retryAfter);
   return null;
 }

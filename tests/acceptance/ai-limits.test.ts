@@ -202,28 +202,38 @@ describe.each(NAMES)("%s", (name) => {
     expect(serviceCalls()).toBe(before);
   });
 
-  it("burst and day are independent; scope says which; both over is day", async () => {
+  it("burst and day are independent; scope says which; day only appears after the burst let the request through", async () => {
     const a = await newDriver();
-    // burst only
     for (let i = 0; i < burst; i++) await call(name, a.token);
     expect((await (await call(name, a.token)).json()).scope).toBe("burst");
     // a new burst window: passes again while the day counter keeps counting (not reset)
     t += 61_000;
     expect((await call(name, a.token)).status).toBeLessThan(400);
-    expect(await store.peekRateLimit(dayKeyNow(cls, a.id))).toBe(burst + 2);
+    expect(await store.peekRateLimit(dayKeyNow(cls, a.id))).toBe(burst + 1);
     // day only: another driver, burst window fresh
     const b = await newDriver();
     await seedDay(cls, b.id, day);
     expect((await (await call(name, b.token)).json()).scope).toBe("day");
     t += 61_000; // burst window gone, day still over: the day does not reset because the burst did
     expect((await (await call(name, b.token)).json()).scope).toBe("day");
-    // both over
+  });
+
+  it("a request stopped by the burst never touches the store: no increment, no day quota", async () => {
+    const a = await newDriver();
+    for (let i = 0; i < 30; i++) await call(name, a.token);
+    expect(store.incs.length).toBe(burst);
+    expect(await store.peekRateLimit(dayKeyNow(cls, a.id))).toBe(burst);
+    // even when the day is already over, the burst answer wins and Redis is not asked
     const c = await newDriver();
-    await seedDay(cls, c.id, day - burst);
-    for (let i = 0; i < burst; i++) expect((await call(name, c.token)).status).toBeLessThan(400);
-    const both = await call(name, c.token);
-    expect(both.status).toBe(429);
-    expect((await both.json()).scope).toBe("day");
+    await seedDay(cls, c.id, day);
+    for (let i = 0; i < burst; i++) await call(name, c.token); // all day (429), but they passed the burst
+    store.incs.length = 0;
+    const res = await call(name, c.token);
+    expect((await res.json()).scope).toBe("burst");
+    expect(store.incs).toEqual([]);
+    // with Redis down a burst-stopped driver still gets 429, not 503
+    store.down = new DriverStoreUnavailableError();
+    expect((await call(name, c.token)).status).toBe(429);
   });
 
   it("drivers A and B have separate counters; forged driverId, contextId and headers never pick the key", async () => {
@@ -246,7 +256,7 @@ describe.each(NAMES)("%s", (name) => {
     const a = await newDriver();
     for (let i = 0; i < burst; i++) expect((await bad400(name, a.token)).status).toBe(400);
     expect((await bad400(name, a.token)).status).toBe(429);
-    expect(await store.peekRateLimit(dayKeyNow(cls, a.id))).toBe(burst + 1);
+    expect(await store.peekRateLimit(dayKeyNow(cls, a.id))).toBe(burst);
     expect(serviceCalls()).toBe(0);
   });
 
@@ -328,7 +338,7 @@ describe("transcribe and tts: oversized requests count too (413)", () => {
     const burst = AI_LIMITS[name].burst;
     for (let i = 0; i < burst; i++) expect((await call(name, a.token, { headers })).status).toBe(413);
     expect((await call(name, a.token, { headers })).status).toBe(429);
-    expect(await store.peekRateLimit(dayKeyNow(name, a.id))).toBe(burst + 1);
+    expect(await store.peekRateLimit(dayKeyNow(name, a.id))).toBe(burst);
     expect(serviceCalls()).toBe(0);
   });
 });

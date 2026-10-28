@@ -329,6 +329,11 @@ describe("rate limit validation and keys", () => {
     await expect(new MemoryDriverStore(P, () => T0, PEPPER).incrementRateLimit("ratelimit:redeem:a", w)).rejects.toThrow();
     await expect(real().incrementRateLimit("ratelimit:redeem:a", w)).rejects.toThrow();
   });
+  it("windowSeconds 90000 (25 h) is accepted, 90001 is refused (memory and upstash)", async () => {
+    fakeUpstash();
+    await expect(new MemoryDriverStore(P, () => T0, PEPPER).incrementRateLimit("ratelimit:redeem:a", 90_000)).resolves.toBe(1);
+    await expect(real().incrementRateLimit("ratelimit:redeem:a", 90_000)).resolves.toBeGreaterThanOrEqual(1);
+  });
   it("only ratelimit: keys with restricted charset", async () => {
     fakeUpstash();
     for (const k of ["driver:abc", "ratelimit:", "ratelimit:a b", "ratelimit:a\n", "x:ratelimit:a", "ratelimit:" + "a".repeat(101)]) {

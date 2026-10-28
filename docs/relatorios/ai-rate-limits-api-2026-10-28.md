@@ -59,3 +59,17 @@ Obs.: a mutação por `contextId` derruba só 1 teste, mas ele cobre as 4 rotas 
 **Não verificado:** Upstash real; limite real de corpo na Vercel; áudio real do iPhone (o teto vem do cálculo do formato e dos limites no código do PWA, não de captura real); A3 (firewall) e alerta de cota; qa e security-review não foram repetidos nesta rodada.
 
 **Desvios:** nenhum novo. O teto de áudio é 1 MB (mínimo do brief), acima do cálculo de 2x (cerca de 960 KB). Itens aceitos pelo orquestrador (eviction, Redis lento, horário de verão, atraso de fala do 429) ficam como estão.
+
+## Rodada final (checagem pontual de segurança: N1, N2, N3)
+**O que mudou**
+- N1: `src/lib/wav-guard.ts` (novo). `transcribe` valida o cabeçalho RIFF/WAVE: `fmt ` PCM (formato 1), 1 a 2 canais, 8000 a 48000 Hz, 8/16/24/32 bits, chunk `data` presente, percorrendo chunks com alinhamento e no máximo 16. Recusa mais de 20 s. Códigos: **415** quando não é RIFF/WAVE ou não é PCM inteiro (opus, webm, ogg, mp3, float, ADPCM); **400** para WAV truncado, malformado, parâmetros absurdos (zero, fora da faixa, sem divisão por zero), `data` maior que o arquivo ou áudio acima de 20 s; 413 continua para mais de 1 MB. Justificativa: 415 descreve "tipo de mídia que não aceito", 400 descreve "é do tipo certo mas está inválido ou longo". O encaminhamento ao provedor é sempre `audio.wav` / `audio/wav`, em JSON e multipart, sem ler `mimeType`, nome ou tipo do cliente.
+- Formato do PWA conferido em `encodeWav16kMono` (`stt-tts-session.ts`): cabeçalho de 44 bytes, PCM mono 16 kHz 16 bits, enviado em JSON com `mimeType: "audio/wav"`. Um enunciado de 12 s e o buffer manual de 470 quadros (15,04 s) passam; os testes usam o próprio codificador.
+- N2: o `transcript` do A2A (`src/lib/a2a-server.ts`) tem o teto de 2000 caracteres, depois do `trim` e somando as partes de texto; erro JSON-RPC `-32602` (parâmetros inválidos) com o `id` da requisição, igual ao erro de "texto ausente" ali.
+- N3: `enforceAiLimit(..., { ownerFailsOpen: false })`; o A2A usa; as três rotas do PWA mantêm a falha aberta do dono.
+- Testes ajustados: os que mandavam bytes falsos como áudio agora mandam WAV (`tests/helpers/wav.ts`); os testes de teto de 1 MB usam WAV de 48 kHz para o arquivo inteiro de 1 MB caber em 20 s.
+
+**Mutações** (cópia fora do repositório; 12, todas mortas): aceitar não-WAV (2 testes caíram), duração só pelo campo do cabeçalho (2), aceitar `data` maior que o arquivo (2), aceitar formato não PCM (2), sem checagem de taxa, canais e bits (2), limite de 21 s (4), checagem de WAV removida da rota (12), repasse de `mimeType` e nome do cliente (2, mutada só no caminho JSON), A2A falhando aberto removendo a opção na rota (1) e ignorando a opção no limitador (1), teto do transcript do A2A removido (1), rotas do PWA perdendo a falha aberta (5).
+
+**Não verificado:** como Groq e OpenAI tratam um WAV real de 20 s (nenhuma chamada real foi feita); PCM de 24 e 32 bits nos provedores (aceito pelo guard, não testado ponta a ponta); áudio real de iPhone; Upstash real.
+
+**Desvios:** a duração é calculada pelos bytes reais depois do início de `data` (o maior entre declarado e real, já que declarado maior que o arquivo é recusado), e não pelo menor dos dois como no brief. É mais estrito: um `data` declarado pequeno sobre um arquivo longo é medido pelo tamanho real, porque um decodificador pode ler tudo. Bytes depois do `data` (por exemplo um chunk `LIST` ao final) entram na conta; o PWA não envia nenhum.

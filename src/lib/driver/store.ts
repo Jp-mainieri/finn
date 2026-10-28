@@ -135,7 +135,8 @@ export class DriverStoreUnavailableError extends Error {
 
 export const MAX_INVITE_USES = 1000;
 export const MAX_INVITE_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
-export const MAX_RATE_WINDOW_SECONDS = 86_400;
+/** 25 h: the per-day AI counters (src/lib/ai-limits.ts) use 90000 s so the day turnover does not depend on the exact clock. */
+export const MAX_RATE_WINDOW_SECONDS = 90_000;
 
 // Control chars (C0, DEL, C1), which also covers NUL, newline and the ESC of ANSI sequences.
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/;

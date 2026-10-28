@@ -324,7 +324,7 @@ describe("hashToRecord", () => {
 });
 
 describe("rate limit validation and keys", () => {
-  it.each([0, -1, 1.5, NaN, Infinity, 86_401])("windowSeconds %s throws (memory and upstash)", async (w) => {
+  it.each([0, -1, 1.5, NaN, Infinity, 90_001])("windowSeconds %s throws (memory and upstash)", async (w) => {
     fakeUpstash();
     await expect(new MemoryDriverStore(P, () => T0, PEPPER).incrementRateLimit("ratelimit:redeem:a", w)).rejects.toThrow();
     await expect(real().incrementRateLimit("ratelimit:redeem:a", w)).rejects.toThrow();

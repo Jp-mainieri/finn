@@ -52,7 +52,7 @@ Obs.: a mutação por `contextId` derruba só 1 teste, mas ele cobre as 4 rotas 
 6. Testes novos: rajada independente por classe, ordem de eviction (a mais antiga sai; janela renovada vai para o fim), teto contra o literal 1000, 503 do motorista com `DriverStoreUnavailableError` e outro erro, `Retry-After` do dia a milissegundos da meia-noite, classes de protótipo, aviso limitado (100 estouros = 1 linha; após 60 s outra; escopos de uma classe separados).
 7. Docs: ARCHITECTURE (A2A, tetos de entrada) e ESTADO_ATUAL (A2A coberto, tetos, `--max-uses 1`, A3 cobrindo as três famílias de rota).
 
-**Comandos e contagens:** lote final abaixo.
+**Comandos e contagens:** `npm test`: 60 arquivos passaram, 1 pulado; 1276 testes passaram, 4 pulados. `npm run typecheck`, `npm run lint` (0 avisos após remover um import sem uso) e `npm run build`: sem erros.
 
 **Mutações** (cópia fora do repositório; 16 mais 1 repetida): A2A sem limite (5 testes caíram), limite do A2A antes da autenticação (4), A2A com a classe do orquestrador (3), teto do transcript removido (2) e com erro de uma unidade (2), teto de áudio de volta a 10 MB (4), dono abre com qualquer erro (4), `in` no lugar de `hasOwn` (1), aviso sem limitação (5), limite de 60 s com `<=` (4), `floor` no `Retry-After` (1), eviction do mais novo (1), janela renovada sem ir ao fim (1), teto 1001 (1), rajada única para todas as classes (3). Sobreviveu uma: chave do aviso sem o escopo (a limitação por classe sem escopo); fechei com teste (dois escopos da mesma classe no mesmo minuto) e a mutação passou a morrer (1). Nenhuma sobrevivente final.
 

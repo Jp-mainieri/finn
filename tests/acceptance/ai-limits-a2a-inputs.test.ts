@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerTestOwner, TEST_OWNER_ID } from "../helpers/owner";
 import { TEST_A2A_TOKEN } from "../helpers/http";
 import { AI_LIMITS, aiDayKey, resetAiLimitsForTests, saoPauloDay } from "@/lib/ai-limits";
-import { keyPrefix, MemoryDriverStore, setDriverStoreForTests, signSessionToken } from "@/lib/driver";
+import { keyPrefix, MemoryDriverStore, setDriverStoreForTests } from "@/lib/driver";
 
 const h = vi.hoisted(() => ({ orchestrate: vi.fn(), a2a: vi.fn() }));
 vi.mock("@/orchestrator/orchestrate", () => ({ orchestrate: h.orchestrate }));

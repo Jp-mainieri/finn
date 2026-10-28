@@ -46,10 +46,10 @@ Fonte: security-review e qa da 5b e a decisao do dono sobre M2 (opcao 1). Commit
 - B3/B4: `leaveDriver()` (sair, trocar convite, token novo, 401): aborta a requisicao do Spotify em voo, sobe `epoch`, limpa legendas, acoes pendentes e estado do Spotify; `DelegationHandler` ignora resposta do orquestrador que chegue depois (dep `sessionEpoch`); `navigate` do Spotify confere epoch e sinal.
 - B1: `scrubSpotifyTokenFromUrl` (replaceState sem ler o valor) no construtor. B5: navega com `u.href` e exige `pathname === "/authorize"`.
 - N11: `legacy-cleanup` cai para `removeItem` se `setItem` lancar. N12: guarda estatica reescrita (`scan()` pura: console multilinha e por alias, `.setItem(` so em token-store/driver-settings/legacy-cleanup e com a chave certa, sessionStorage/indexedDB/cookie, sinks de HTML nos .tsx, localStorage em .tsx) provada por 14 mutacoes dentro do proprio teste. N13: testes de Retry-After, "mensagens distintas" (agora a partir de resultados reais), "nunca chama a rota de TTS" (agora com `getTtsMode: openai`) e speakLocal vs speak (controller) falham quando a protecao e desfeita.
-- `voice-controller.test.ts` (novo, 25 testes): 401 volta a tela; "outro convite" sobrescreve; "Sair" apaga; `onVisible` reconsulta; purge e scrub no construtor; token legado usado; corridas B3/B4; fala local no orquestrador e na saudacao.
+- `voice-controller.test.ts` (novo, 29 testes): 401 volta a tela; "outro convite" sobrescreve; "Sair" apaga; `onVisible` reconsulta; purge e scrub no construtor; token legado usado; corridas B3/B4; fala local no orquestrador e na saudacao.
 - Docs: ARCHITECTURE.md (M2, `driver:rotate`, `savedAddresses`, sem "primeiro carregamento"), tests/MANUAL.md (N3/B7, N7/N9, timeout, M2).
 
-2. Testes: ver lote final abaixo.
+2. Testes (com `tests/qa/` movido para fora e restaurado): `npm test && npm run typecheck && npm run lint && npm run build`: 1137 passaram, 4 ignorados, 0 falharam (era 1031); typecheck, lint e build limpos. Com `tests/qa/` presente o typecheck falha (ver Desvios).
 Mutacao manual (script fora do repo, arvore restaurada): 20 mutacoes em producao (invite-client, spotify-connection, request-timeout, voice-controller, stt-tts-session, token-store, legacy-cleanup); 18 mortas, 2 sobreviventes por redundancia deliberada (o `epoch` do controller e o `AbortSignal`/`signal.aborted` cobrem o mesmo caso; cada um sozinho e removivel sem quebrar o comportamento) e 1 mutacao equivalente (no-op).
 
 3. Nao verificado

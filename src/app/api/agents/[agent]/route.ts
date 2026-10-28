@@ -14,7 +14,7 @@ export async function POST(request: Request, ctx: RouteContext<"/api/agents/[age
   // Per-driver ceiling (the A2A caller is the owner). Before the body is read or any agent/LLM runs.
   const owner = getOwnerDriverId();
   if (!owner) return Response.json({ error: "A2A endpoint disabled" }, { status: 503 });
-  const limited = await enforceAiLimit("a2a", owner);
+  const limited = await enforceAiLimit("a2a", owner, { ownerFailsOpen: false });
   if (limited) return limited;
 
   const { agent: id } = await ctx.params;

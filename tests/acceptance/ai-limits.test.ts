@@ -4,6 +4,7 @@
  * stubbed fetch and stubbed orchestrate: no network, no paid service.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { b64, makeWav } from "../helpers/wav";
 import { registerTestOwner, TEST_OWNER_ID } from "../helpers/owner";
 import {
   AI_LIMITS,
@@ -60,7 +61,7 @@ const PATH: Record<Name, string> = {
 };
 const VALID: Record<Name, unknown> = {
   orchestrator: { transcript: "toca rock" },
-  stt: { audio: Buffer.from("abc").toString("base64"), mimeType: "audio/webm" },
+  stt: { audio: b64(makeWav()), mimeType: "audio/wav" },
   tts: { text: "oi" },
   live: { sdp: "v=0" },
 };

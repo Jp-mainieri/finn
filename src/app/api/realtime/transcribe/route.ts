@@ -1,6 +1,7 @@
 import { authorizeDriver } from "@/lib/auth";
 import { enforceAiLimit } from "@/lib/ai-limits";
 import { optionalEnv } from "@/lib/env";
+import { checkWavPcm } from "@/lib/wav-guard";
 
 const GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 const OPENAI_TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions";
@@ -51,8 +52,7 @@ export async function POST(request: Request) {
   }
 
   const contentType = request.headers.get("content-type") ?? "";
-  let audioBlob: Blob | null = null;
-  let filename = "audio.wav";
+  let audioBytes: Uint8Array | null = null;
 
   if (contentType.includes("application/json")) {
     let body: { audio?: unknown; audioBase64?: unknown; mimeType?: unknown } | null = null;
@@ -67,7 +67,6 @@ export async function POST(request: Request) {
       return Response.json({ error: "Audio data is required" }, { status: 400 });
     }
 
-    const cleanMime = (typeof body?.mimeType === "string" ? body.mimeType : "audio/wav").split(";")[0]?.trim() || "audio/wav";
     const base64Clean = raw.replace(/^data:[^;]+;base64,/, "");
     const buffer = Buffer.from(base64Clean, "base64");
     if (buffer.length === 0) {
@@ -80,9 +79,8 @@ export async function POST(request: Request) {
       );
     }
 
-    audioBlob = new Blob([buffer], { type: cleanMime });
-    if (cleanMime.includes("webm")) filename = "audio.webm";
-    else if (cleanMime.includes("mp4") || cleanMime.includes("m4a")) filename = "audio.m4a";
+    // `mimeType` from the client is ignored: only the bytes decide (WAV PCM), see below.
+    audioBytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
   } else if (contentType.includes("multipart/form-data") || contentType.includes("application/x-www-form-urlencoded")) {
     let formData: FormData | null = null;
     try {
@@ -105,18 +103,19 @@ export async function POST(request: Request) {
       );
     }
 
-    audioBlob = field;
-    if (field instanceof File && field.name) {
-      filename = field.name;
-    } else if (field.type.includes("webm")) {
-      filename = "audio.webm";
-    }
+    // Name and type from the client are ignored.
+    audioBytes = new Uint8Array(await field.arrayBuffer());
   } else {
     return Response.json({ error: "Content-Type must be application/json or multipart/form-data" }, { status: 400 });
   }
 
+  // Only WAV PCM, at most MAX_WAV_SECONDS: the codec is the client's choice and bytes do not bound duration.
+  const wav = checkWavPcm(audioBytes);
+  if (!wav.ok) return Response.json({ error: wav.reason }, { status: wav.status });
+
+  // Always forwarded as audio.wav / audio/wav, whatever the client called it.
   const upstreamForm = new FormData();
-  upstreamForm.append("file", audioBlob, filename);
+  upstreamForm.append("file", new Blob([audioBytes as BlobPart], { type: "audio/wav" }), "audio.wav");
   upstreamForm.append("model", model);
   upstreamForm.append("language", "pt");
   upstreamForm.append("prompt", STT_PROMPT);

@@ -1,3 +1,4 @@
+import { b64, makeWav } from "../../../../../tests/helpers/wav";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 
@@ -60,7 +61,7 @@ describe("POST /api/realtime/transcribe", () => {
   it("returns 503 when neither Groq nor OpenAI is configured", async () => {
     vi.stubEnv("GROQ_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
-    const res = await POST(jsonReq({ audio: "AQID" }));
+    const res = await POST(jsonReq({ audio: b64(makeWav()) }));
     expect(res.status).toBe(503);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -70,7 +71,7 @@ describe("POST /api/realtime/transcribe", () => {
       Response.json({ text: "  Toca a playlist do Finn  " }, { status: 200 }),
     );
 
-    const res = await POST(jsonReq({ audio: Buffer.from("fake-pcm").toString("base64") }));
+    const res = await POST(jsonReq({ audio: b64(makeWav()) }));
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data).toEqual({ text: "Toca a playlist do Finn", provider: "groq" });
@@ -88,7 +89,7 @@ describe("POST /api/realtime/transcribe", () => {
       Response.json({ text: "Leva pra casa" }, { status: 200 }),
     );
 
-    const res = await POST(jsonReq({ audio: "AQID" }));
+    const res = await POST(jsonReq({ audio: b64(makeWav()) }));
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data).toEqual({ text: "Leva pra casa", provider: "openai" });
@@ -104,7 +105,7 @@ describe("POST /api/realtime/transcribe", () => {
       Response.json({ text: "Pausa a música" }, { status: 200 }),
     );
 
-    const res = await POST(jsonReq({ audio: "AQID" }));
+    const res = await POST(jsonReq({ audio: b64(makeWav()) }));
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.provider).toBe("openai");
@@ -116,7 +117,7 @@ describe("POST /api/realtime/transcribe", () => {
     );
 
     const form = new FormData();
-    form.append("file", new Blob([new Uint8Array([1, 2, 3])], { type: "audio/wav" }), "audio.wav");
+    form.append("file", new Blob([makeWav()], { type: "audio/wav" }), "audio.wav");
 
     const res = await POST(formReq(form));
     expect(res.status).toBe(200);
@@ -129,7 +130,7 @@ describe("POST /api/realtime/transcribe", () => {
       Response.json({ error: "rate limit" }, { status: 429 }),
     );
 
-    const res = await POST(jsonReq({ audio: "AQID" }));
+    const res = await POST(jsonReq({ audio: b64(makeWav()) }));
     expect(res.status).toBe(502);
   });
 });

@@ -5,8 +5,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerTestOwner, TEST_OWNER_ID } from "../helpers/owner";
 import { TEST_A2A_TOKEN } from "../helpers/http";
+import { b64, makeWav, pwaBytes, type WavOpts } from "../helpers/wav";
+import { encodeWav16kMono } from "@/lib/voice/stt-tts-session";
 import { AI_LIMITS, aiDayKey, resetAiLimitsForTests, saoPauloDay } from "@/lib/ai-limits";
-import { keyPrefix, MemoryDriverStore, setDriverStoreForTests } from "@/lib/driver";
+import { DriverStoreUnavailableError, keyPrefix, MemoryDriverStore, setDriverStoreForTests } from "@/lib/driver";
 
 const h = vi.hoisted(() => ({ orchestrate: vi.fn(), a2a: vi.fn() }));
 vi.mock("@/orchestrator/orchestrate", () => ({ orchestrate: h.orchestrate }));
@@ -155,17 +157,19 @@ describe("orchestrator transcript cap", () => {
 
 describe("transcribe audio cap (1 MB of decoded audio)", () => {
   const MB = 1024 * 1024;
-  const json = (bytes: number, headers: Record<string, string> = {}) =>
+  /** A WAV of exactly `total` bytes (48 kHz mono, so a whole MB stays under the 20 s limit). */
+  const wavOf = (total: number) => makeWav({ rate: 48000, dataBytes: total - 44 });
+  const json = (total: number, headers: Record<string, string> = {}) =>
     transcribePOST(
       new Request("http://x/api/realtime/transcribe", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${LEGACY}`, ...headers },
-        body: JSON.stringify({ audio: Buffer.alloc(bytes, 1).toString("base64"), mimeType: "audio/wav" }),
+        body: JSON.stringify({ audio: b64(wavOf(total)), mimeType: "audio/wav" }),
       }),
     );
-  const form = (bytes: number) => {
+  const form = (total: number) => {
     const fd = new FormData();
-    fd.append("file", new File([new Uint8Array(bytes)], "a.wav", { type: "audio/wav" }));
+    fd.append("file", new File([wavOf(total)], "a.wav", { type: "audio/wav" }));
     return transcribePOST(
       new Request("http://x/api/realtime/transcribe", {
         method: "POST",
@@ -195,12 +199,188 @@ describe("transcribe audio cap (1 MB of decoded audio)", () => {
   });
 
   it("a declared content-length above 1.5 x cap is refused up front", async () => {
-    expect((await json(10, { "content-length": String(Math.floor(MB * 1.5) + 1) })).status).toBe(413);
+    expect((await json(100, { "content-length": String(Math.floor(MB * 1.5) + 1) })).status).toBe(413);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("refused audio counts toward the ceiling", async () => {
     await json(MB + 1);
     expect(store.ai().length).toBe(1);
+  });
+});
+
+describe("A2A transcript cap", () => {
+  const withText = (text: string) =>
+    a2aPOST(
+      new Request("http://x/api/agents/waze", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${TEST_A2A_TOKEN}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "message/send", params: { message: { parts: [{ kind: "text", text }] } } }),
+      }),
+      { params: Promise.resolve({ agent: "waze" }) } as never,
+    );
+
+  it("is checked by the real handler: 2000 passes, 2001 is a -32602 with the request id and no agent call", async () => {
+    const real = await vi.importActual<typeof import("@/lib/a2a-server")>("@/lib/a2a-server");
+    const agent = { handle: vi.fn(async () => ({ agent: "waze", status: "completed", speech: "ok", clientActions: [], toolCalls: [] })) };
+    const call = (text: string) =>
+      real.handleA2ARequest(
+        agent as never,
+        new Request("http://x", {
+          method: "POST",
+          body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "message/send", params: { message: { parts: [{ kind: "text", text }] } } }),
+        }),
+      );
+    expect("error" in (await call("a".repeat(2000)))).toBe(false);
+    expect(agent.handle).toHaveBeenCalledTimes(1);
+    const over = await call("a".repeat(2001));
+    expect(over).toMatchObject({ jsonrpc: "2.0", id: 7, error: { code: -32602 } });
+    expect(agent.handle).toHaveBeenCalledTimes(1);
+    // trimmed text, and several parts are summed
+    expect("error" in (await call(`   ${"a".repeat(2000)}   `))).toBe(false);
+    const parts = await real.handleA2ARequest(
+      agent as never,
+      new Request("http://x", {
+        method: "POST",
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 8,
+          method: "message/send",
+          params: { message: { parts: [{ kind: "text", text: "a".repeat(1000) }, { kind: "text", text: "b".repeat(1000) }] } },
+        }),
+      }),
+    );
+    expect(parts).toMatchObject({ error: { code: -32602 } }); // 1000 + space + 1000 = 2001
+  });
+
+  it("the route still counts the refused request", async () => {
+    expect((await withText("x")).status).toBe(200);
+    expect(store.ai().length).toBe(1);
+  });
+});
+
+describe("owner fail-open: PWA routes keep it, A2A does not", () => {
+  it("counter down (DriverStoreUnavailableError): orchestrator passes for the owner, A2A is 503 without the agent", async () => {
+    store.incrementRateLimit = async (k: string) => {
+      store.incs.push(k);
+      throw new DriverStoreUnavailableError();
+    };
+    expect((await orch("toca rock")).status).toBe(200);
+    expect(h.orchestrate).toHaveBeenCalledTimes(1);
+    const res = await a2a();
+    expect(res.status).toBe(503);
+    expect(h.a2a).not.toHaveBeenCalled();
+  });
+});
+
+describe("transcribe accepts only WAV PCM of at most 20 s", () => {
+  const sent = (bytes: Uint8Array, o: { mimeType?: string; name?: string; type?: string; multipart?: boolean } = {}) => {
+    if (o.multipart) {
+      const fd = new FormData();
+      fd.append("file", new File([bytes as BlobPart], o.name ?? "a.wav", { type: o.type ?? "audio/wav" }));
+      return transcribePOST(
+        new Request("http://x/api/realtime/transcribe", { method: "POST", headers: { authorization: `Bearer ${LEGACY}` }, body: fd }),
+      );
+    }
+    return transcribePOST(
+      new Request("http://x/api/realtime/transcribe", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${LEGACY}` },
+        body: JSON.stringify({ audio: b64(bytes), mimeType: o.mimeType ?? "audio/wav" }),
+      }),
+    );
+  };
+  const forwarded = () => {
+    const form = fetchMock.mock.calls[0][1].body as FormData;
+    const file = form.get("file") as File;
+    return { name: file.name, type: file.type, size: file.size };
+  };
+  const MODES = [{ multipart: false }, { multipart: true }];
+
+  describe.each(MODES)("multipart=$multipart", ({ multipart }) => {
+    it("what the PWA sends passes: 12 s utterance and the ~15 s manual buffer (real encoder)", async () => {
+      const chunk = (frames: number) => Array.from({ length: frames }, () => new Int16Array(512).fill(5));
+      for (const frames of [Math.ceil(12000 / 32) + 5, 470]) {
+        fetchMock.mockClear();
+        expect((await sent(encodeWav16kMono(chunk(frames)), { multipart })).status).toBe(200);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it("20 s passes, 20 s plus one sample is 400 and the service is not called", async () => {
+      expect((await sent(makeWav({ dataBytes: pwaBytes(20) }), { multipart })).status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      fetchMock.mockClear();
+      const res = await sent(makeWav({ dataBytes: pwaBytes(20) + 2 }), { multipart });
+      expect(res.status).toBe(400);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("the boundary follows rate, channels and bits (8 kHz 8-bit mono, 48 kHz stereo 16-bit)", async () => {
+      const a: WavOpts = { rate: 8000, bits: 8 };
+      expect((await sent(makeWav({ ...a, dataBytes: 8000 * 20 }), { multipart })).status).toBe(200);
+      expect((await sent(makeWav({ ...a, dataBytes: 8000 * 20 + 1 }), { multipart })).status).toBe(400);
+      const b: WavOpts = { rate: 11025, channels: 2, bits: 16 };
+      expect((await sent(makeWav({ ...b, dataBytes: 11025 * 4 * 20 }), { multipart })).status).toBe(200);
+      expect((await sent(makeWav({ ...b, dataBytes: 11025 * 4 * 20 + 4 }), { multipart })).status).toBe(400);
+    });
+
+    it("opus/webm/ogg/mp3 are 415 even with a forged WAV mimeType and name; the service is not called", async () => {
+      const webm = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, ...new Uint8Array(500)]);
+      const ogg = new Uint8Array([...Buffer.from("OggS"), ...new Uint8Array(500)]);
+      const mp3 = new Uint8Array([0x49, 0x44, 0x33, 3, 0, ...new Uint8Array(500)]);
+      for (const bytes of [webm, ogg, mp3, new Uint8Array([1, 2, 3]), new Uint8Array(100)]) {
+        const res = await sent(bytes, { multipart, mimeType: "audio/wav", type: "audio/wav", name: "voice.wav" });
+        expect(res.status).toBe(415);
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("a RIFF/WAVE that is not integer PCM is 415", async () => {
+      expect((await sent(makeWav({ format: 3, bits: 32 }), { multipart })).status).toBe(415); // IEEE float
+      expect((await sent(makeWav({ format: 0x11 }), { multipart })).status).toBe(415); // ADPCM
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("forged mimeType, name and type never reach the provider: always audio.wav / audio/wav", async () => {
+      const res = await sent(makeWav(), { multipart, mimeType: "audio/webm;codecs=opus", name: "../../evil.webm", type: "audio/webm" });
+      expect(res.status).toBe(200);
+      expect(forwarded()).toMatchObject({ name: "audio.wav", type: "audio/wav" });
+    });
+
+    it("malformed WAVs are 400: truncated, zero or absurd parameters, fmt missing or after data", async () => {
+      const ok = makeWav();
+      const cases: Uint8Array[] = [
+        ok.slice(0, 12), // RIFF/WAVE and nothing else
+        ok.slice(0, 20), // fmt chunk cut short
+        ok.slice(0, 44), // no audio at all
+        makeWav({ rate: 0 }),
+        makeWav({ channels: 0 }),
+        makeWav({ bits: 0 }),
+        makeWav({ channels: 3 }),
+        makeWav({ rate: 4_000_000_000 }),
+        makeWav({ rate: 1 }),
+        makeWav({ bits: 12 }),
+      ];
+      const noFmt = ok.slice(); // rename "fmt " so the data chunk comes first
+      noFmt.set(Buffer.from("junk"), 12);
+      cases.push(noFmt);
+      for (const bytes of cases) expect((await sent(bytes, { multipart })).status).toBe(400);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("a lying data chunk: declared larger than the file is 400; declared small over a long file is measured by the real bytes", async () => {
+      expect((await sent(makeWav({ dataBytes: 3200, declared: 640_000 }), { multipart })).status).toBe(400);
+      expect((await sent(makeWav({ dataBytes: 3200, declared: 0xffffffff }), { multipart })).status).toBe(400);
+      expect((await sent(makeWav({ dataBytes: pwaBytes(25), declared: 1000 }), { multipart })).status).toBe(400);
+      expect((await sent(makeWav({ dataBytes: pwaBytes(25), declared: 0 }), { multipart })).status).toBe(400);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("every refused request still counts toward the ceiling", async () => {
+      await sent(new Uint8Array([1, 2, 3]), { multipart }); // 415
+      await sent(makeWav({ dataBytes: pwaBytes(21) }), { multipart }); // 400
+      expect(store.ai().length).toBe(2);
+    });
   });
 });

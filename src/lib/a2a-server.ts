@@ -34,6 +34,9 @@ export function buildAgentCard(fields: {
   };
 }
 
+/** Same ceiling as the orchestrator route (a spoken command is a sentence). */
+const MAX_TRANSCRIPT_CHARS = 2000;
+
 function rpcError(id: A2AResponse["id"], code: number, message: string): A2AResponse {
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
@@ -61,6 +64,10 @@ export async function handleA2ARequest(agent: Agent, request: Request): Promise<
     .join(" ")
     .trim();
   if (!transcript) return rpcError(body.id, -32602, "Invalid params: message needs a text part");
+  // Same cap as /api/orchestrator, on the trimmed text. -32602 (invalid params) is this endpoint's error for a bad field.
+  if (transcript.length > MAX_TRANSCRIPT_CHARS) {
+    return rpcError(body.id, -32602, `Invalid params: text must have at most ${MAX_TRANSCRIPT_CHARS} characters`);
+  }
 
   // A follow-up to an `input-required` task carries the agent's state as { continuation } in a data part.
   // Untrusted and unsigned: at most 2 KB here, then parsed strictly by the agent (unknown shapes ignored).

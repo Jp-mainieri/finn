@@ -138,9 +138,9 @@ const unavailable = () =>
  * The single gate of the four AI routes. Burst is checked first and, when over, answers 429 without touching Redis; only requests it lets through count for the day. Call it right after `authorizeDriver` (and, for `live`, after the
  * ENABLE_GPT_LIVE check), BEFORE reading the body or calling any paid service. Returns an error Response
  * (429 or 503) or null when the request may proceed. Every call counts, including requests that turn out malformed.
- * Day counter down: a driver gets 503 (fail closed), the owner passes (fail open, day ceiling only; burst still applies).
+ * `ownerFailsOpen: false` (the A2A route) turns the owner's fail-open off. Day counter down: a driver gets 503 (fail closed), the owner passes (fail open, day ceiling only; burst still applies).
  */
-export async function enforceAiLimit(cls: AiClass, driverId: string, deps: { store?: DriverStore } = {}): Promise<Response | null> {
+export async function enforceAiLimit(cls: AiClass, driverId: string, deps: { store?: DriverStore; ownerFailsOpen?: boolean } = {}): Promise<Response | null> {
   const now = clock();
   const { day, secondsToMidnight } = saoPauloDay(now);
 
@@ -161,7 +161,7 @@ export async function enforceAiLimit(cls: AiClass, driverId: string, deps: { sto
   } catch (err) {
     // Fail open only for the owner AND only when the store itself reported "unavailable"; any other error
     // (misconfiguration, a bug) is a 503 for everyone.
-    if (!(err instanceof DriverStoreUnavailableError) || !isOwner(driverId)) return unavailable();
+    if (deps.ownerFailsOpen === false || !(err instanceof DriverStoreUnavailableError) || !isOwner(driverId)) return unavailable();
     warnOnce(cls, "day counter unavailable");
     dayCount = null;
   }

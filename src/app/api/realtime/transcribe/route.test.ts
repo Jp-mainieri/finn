@@ -117,7 +117,7 @@ describe("POST /api/realtime/transcribe", () => {
     );
 
     const form = new FormData();
-    form.append("file", new Blob([makeWav()], { type: "audio/wav" }), "audio.wav");
+    form.append("file", new Blob([makeWav() as BlobPart], { type: "audio/wav" }), "audio.wav");
 
     const res = await POST(formReq(form));
     expect(res.status).toBe(200);

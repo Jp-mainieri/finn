@@ -169,7 +169,7 @@ describe("transcribe audio cap (1 MB of decoded audio)", () => {
     );
   const form = (total: number) => {
     const fd = new FormData();
-    fd.append("file", new File([wavOf(total)], "a.wav", { type: "audio/wav" }));
+    fd.append("file", new File([wavOf(total) as BlobPart], "a.wav", { type: "audio/wav" }));
     return transcribePOST(
       new Request("http://x/api/realtime/transcribe", {
         method: "POST",

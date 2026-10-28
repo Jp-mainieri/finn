@@ -73,3 +73,5 @@ Obs.: a mutação por `contextId` derruba só 1 teste, mas ele cobre as 4 rotas 
 **Não verificado:** como Groq e OpenAI tratam um WAV real de 20 s (nenhuma chamada real foi feita); PCM de 24 e 32 bits nos provedores (aceito pelo guard, não testado ponta a ponta); áudio real de iPhone; Upstash real.
 
 **Desvios:** a duração é calculada pelos bytes reais depois do início de `data` (o maior entre declarado e real, já que declarado maior que o arquivo é recusado), e não pelo menor dos dois como no brief. É mais estrito: um `data` declarado pequeno sobre um arquivo longo é medido pelo tamanho real, porque um decodificador pode ler tudo. Bytes depois do `data` (por exemplo um chunk `LIST` ao final) entram na conta; o PWA não envia nenhum.
+
+**Comandos e contagens (depois do último ajuste):** `npm test`: 62 arquivos passaram, 1 pulado; 1323 testes passaram, 4 pulados. `npm run typecheck` (0 erros; um primeiro lote acusou 2 erros de tipo `BlobPart` em testes, corrigidos), `npm run lint` e `npm run build`: sem erros.

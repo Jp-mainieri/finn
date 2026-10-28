@@ -230,6 +230,7 @@ describe("SttTtsVoiceSession session lifecycle & VAD", () => {
     const session = new SttTtsVoiceSession({
       audio: mockAudio as unknown as AudioIO,
       getToken: () => "s3cret",
+      getTtsMode: () => "openai", // the networked TTS would be used by `speak`; `speakLocal` must not
       handlers,
       fetchImpl: fetchMock,
     });
@@ -249,7 +250,8 @@ describe("SttTtsVoiceSession session lifecycle & VAD", () => {
     expect(handlers.onAssistantTranscript).toHaveBeenCalledWith(expect.objectContaining({ delta: line }));
     expect(handlers.onError).toHaveBeenCalledWith(errorMsg);
     expect(handlers.onDelegation).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(1); // transcribe only; the local line did not use /api/realtime/tts
+    expect(fetchMock).toHaveBeenCalledTimes(1); // transcribe only
+    expect(fetchMock.mock.calls.map(([u]) => u)).not.toContain("/api/realtime/tts");
     vi.useRealTimers();
   });
 });

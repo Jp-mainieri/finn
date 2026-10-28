@@ -32,6 +32,14 @@ export function isDevelopmentFlow(env: Record<string, string | undefined> = proc
   return env.NODE_ENV === "development" && (!env.VERCEL_ENV || env.VERCEL_ENV === "development");
 }
 
+/** Cookie that until delivery 4 held the refresh token in clear on the device. The server no longer reads or sets it. */
+export const LEGACY_REFRESH_COOKIE = "finn_spotify_rt";
+
+/** Set-Cookie value that expires the legacy refresh-token cookie. Carries no value; Secure except in local development. */
+export function expireLegacyRefreshCookie(env: Record<string, string | undefined> = process.env): string {
+  return `${LEGACY_REFRESH_COOKIE}=; Path=/; Max-Age=0; HttpOnly; ${isDevelopmentFlow(env) ? "" : "Secure; "}SameSite=Lax`;
+}
+
 export function buildAuthorizeUrl(clientId: string, redirectUri: string, state: string): string {
   const params = new URLSearchParams({
     response_type: "code",

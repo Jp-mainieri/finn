@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DriverStoreUnavailableError, MemoryDriverStore, setDriverStoreForTests, signSessionToken, type DriverStore } from "@/lib/driver";
 import { getAccessToken, resetSpotifyTokenCache } from "@/lib/spotify/auth";
 import { createFakeSpotify, json, loggedText, OTHER_TEST_KEY, TEST_ENC_KEY, TOKEN_URL } from "@/lib/spotify/testing";
+import { expireLegacyRefreshCookie } from "@/lib/spotify/oauth";
 import { loadSpotifyRefreshToken } from "@/lib/spotify/token-vault";
 import { GET as callbackGET } from "./callback/route";
 import { POST as connectPOST } from "./connect/route";
@@ -339,6 +340,29 @@ describe("GET/DELETE /api/spotify/connection", () => {
   it("401 without a session", async () => {
     expect((await status()).status).toBe(401);
     expect((await disconnect()).status).toBe(401);
+  });
+
+  it("success answers of GET and DELETE expire the legacy refresh cookie (no value); 401 and 503 do not", async () => {
+    const a = await newDriver("A");
+    for (const res of [await status(a.token), await disconnect(a.token)]) {
+      expect(res.status).toBe(200);
+      const cookie = res.headers.get("set-cookie") ?? "";
+      expect(cookie).toBe("finn_spotify_rt=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
+      expect(cookie.split(";")[0]).toBe("finn_spotify_rt=");
+    }
+    expect((await status()).headers.get("set-cookie")).toBeNull();
+    expect((await disconnect()).headers.get("set-cookie")).toBeNull();
+    vi.stubEnv("FINN_TOKEN_ENC_KEY", "");
+    const down = await status(a.token);
+    expect(down.status).toBe(503);
+    expect(down.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("the expiry cookie drops Secure only in local development", () => {
+    expect(expireLegacyRefreshCookie({ NODE_ENV: "development" })).toBe("finn_spotify_rt=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
+    expect(expireLegacyRefreshCookie({ NODE_ENV: "production" })).toContain("Secure");
+    expect(expireLegacyRefreshCookie({ NODE_ENV: "development", VERCEL_ENV: "preview" })).toContain("Secure");
+    expect(expireLegacyRefreshCookie({})).toContain("Secure");
   });
 
   it("reports connected only after the flow, per driver; only a boolean in the body", async () => {

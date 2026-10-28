@@ -61,3 +61,11 @@ Mutacao manual (script fora do repo, arvore restaurada): 20 mutacoes em producao
 5. Desvios
 - Item 4 do coordenador ("token guardado que nao casa e descartado"): aplicado so ao que nao pode ser token valido (`v1.` fora do formato; ASCII nao imprimivel; >1024). O token legado (`FINN_API_TOKEN`, formato livre) continua valendo, pois o contrato manda manter o legado funcionando.
 - `tests/qa/web-pwa-invite.test.ts` (do coordenador, nao commitado) usa as assinaturas antigas (`fetchConnection(token, fetch)`, `normalizeInviteCode` retornando string) e as caracterizacoes "CHARACTERISATION" que agora sao falsas; ele quebra o typecheck e alguns testes. Nao toquei nem apaguei; rodei o lote com ele movido para fora e restaurado em seguida. Precisa ser removido ou atualizado por quem o mantem.
+
+## M3 no PWA (2026-10-28, branch `feat/ai-rate-limits`)
+
+1. O que mudou: `failure-speech.ts` ganhou `classifyServerFailure(res)` (503 = unavailable; 429 = `day_limited` só se o corpo tiver `scope === "day"` exato, senão `rate_limited`) e a fala fixa "Você atingiu o limite de uso de hoje. Volte amanhã.". O corpo só é lido no 429, com teto de 1 KB, prazo de 1,5 s e try/catch (nunca lança). Usado por `orchestrator-client` (nova falha `day_limited`), `stt-tts-session` (transcribe), `live-session`/`voice-controller` (`DayLimitedError`, saudação, conexão) e `delegation-handler`. Convite e Spotify não mudam. TTS 429 continua caindo na voz nativa lendo o texto da resposta (não há fala de falha ali). `serverFailureKind` (por status) foi removida. `Retry-After` não decide texto. Docs: ARCHITECTURE.md e tests/MANUAL.md (caso do 429 do dia).
+2. Testes: `npm test && npm run typecheck && npm run lint && npm run build`: 1244 passaram, 4 ignorados, 0 falharam; typecheck, lint e build limpos. Mutações em cópia fora do repo (scratchpad): `toLowerCase`, `trim`, `includes`, `startsWith`, remover o teto de tamanho, 503 virando day_limited, `String(scope)`: todas mortas.
+3. Não verificado: nada em iPhone; o corpo real do 429 do servidor não foi exercitado (formato lido do contrato); fala nativa com mic aberto no iOS.
+4. Decisões: nenhuma.
+5. Desvios: o prazo de 1,5 s para ler o corpo e o teto de 1 KB são escolhas minhas (o contrato só pede teto). 

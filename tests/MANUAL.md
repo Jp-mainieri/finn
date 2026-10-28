@@ -86,7 +86,8 @@ Answers the open question that decides whether the OAuth callback gets tied to t
 ### Server-down and throttling lines (spoken by the phone, no network)
 
 - [ ] Force a 503 (preview without Redis, or a stopped backend) and give a command: you hear "O Finn está fora do ar agora, tente de novo daqui a pouco."
-- [ ] Force a 429 (exceed the rate limit in the test environment) and give a command: you hear "Muitas tentativas, tente de novo em instantes."
+- [ ] Force a 429 (exceed the per-minute burst limit in the test environment) and give a command: you hear "Muitas tentativas, tente de novo em instantes."
+- [ ] Force the **daily** 429 (`scope: "day"`: exceed the daily ceiling in a test environment, or lower it in a preview build) and give a command: you hear "Você atingiu o limite de uso de hoje. Volte amanhã." (not the generic burst line). The text is fixed on the phone; only the exact `scope` "day" selects it.
 - [ ] With the mic active on iOS, native speech can be muted by the system: note whether these lines are audible or only appear on screen.
 - [ ] A 401 mid-trip (revoke the driver) sends you back to the invite screen with a short on-screen notice.
 

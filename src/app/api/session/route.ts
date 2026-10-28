@@ -7,6 +7,7 @@ import {
   getSessionSecret,
   signSessionToken,
 } from "@/lib/driver";
+import { expireLegacyRefreshCookie } from "@/lib/spotify/oauth";
 
 // Never log the invite code, the token or the request body in this file.
 
@@ -81,7 +82,11 @@ export async function POST(request: Request) {
     if (!driver) return invalidInvite();
 
     const token = signSessionToken({ driverId: driver.driverId, tokenVersion: driver.tokenVersion }, secret);
-    return Response.json({ token, driverId: driver.driverId, label: driver.label }, { headers: NO_STORE });
+    // Success only: also expires the legacy refresh-token cookie left on the device (never read here).
+    return Response.json(
+      { token, driverId: driver.driverId, label: driver.label },
+      { headers: { ...NO_STORE, "Set-Cookie": expireLegacyRefreshCookie() } },
+    );
   } catch {
     return unavailableResponse();
   }

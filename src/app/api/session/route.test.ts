@@ -46,6 +46,27 @@ describe("/api/session", () => {
 
   const future = () => Date.now() + 3_600_000;
 
+  it("redeem 200 expires the legacy Spotify cookie; error answers do not", async () => {
+    const { route, store } = await boot();
+    const { code } = await store.createInvite({ label: "Carro", maxUses: 1, expiresAt: future() });
+    const ok = await route.POST(post({ inviteCode: code }));
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("set-cookie")).toBe("finn_spotify_rt=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
+    for (const res of [
+      await route.POST(post({ inviteCode: code })), // exhausted: 401
+      await route.POST(post("not json")), // 400
+      await route.POST(post({ inviteCode: "" })), // 400
+      await route.POST(post({}, { ...IP, "content-type": "text/plain" })), // 415
+    ]) {
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(res.headers.get("set-cookie")).toBeNull();
+    }
+    vi.stubEnv("FINN_SESSION_SECRET", "");
+    const down = await route.POST(post({ inviteCode: code }));
+    expect(down.status).toBe(503);
+    expect(down.headers.get("set-cookie")).toBeNull();
+  });
+
   it("redeems an invite, returns a token that GET /api/session accepts", async () => {
     const { route, store } = await boot();
     const { code } = await store.createInvite({ label: "Carro", maxUses: 1, expiresAt: future() });

@@ -21,6 +21,8 @@ export interface DelegationHandlerDeps {
   speak: (delegationId: string, text: string) => void;
   /** Phone's own TTS, no network: used for 429/503 (the server is the problem). Falls back to `speak`. */
   speakLocal?: (text: string) => void;
+  /** Identifies the signed-in driver; a change while a request is in flight drops the late answer. */
+  sessionEpoch?: () => number;
   onWorkStarted?: () => void;
   onWorkFinished?: () => void;
   onTurn?: (turn: { transcript: string; response: OrchestratorResponse }) => void;
@@ -53,7 +55,10 @@ export class DelegationHandler {
       return;
     }
 
+    const epoch = this.deps.sessionEpoch?.();
     const result = await this.deps.orchestrator.send(transcript);
+    // The driver signed out or switched invite meanwhile: nothing of this answer may reach the next one.
+    if (epoch !== this.deps.sessionEpoch?.()) return;
     if (result.ok) {
       this.deps.speak(id, result.response.speech);
       this.deps.onTurn?.({ transcript, response: result.response });

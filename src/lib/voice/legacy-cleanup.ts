@@ -34,8 +34,33 @@ export function purgeLegacyDriverSettings(storage: KeyValueStorage | undefined):
         changed = true;
       }
     }
-    if (changed) storage?.setItem(DRIVER_SETTINGS_STORAGE_KEY, JSON.stringify(clean));
+    if (changed) {
+      try {
+        storage?.setItem(DRIVER_SETTINGS_STORAGE_KEY, JSON.stringify(clean));
+      } catch {
+        // Could not rewrite (quota): dropping the whole blob is better than keeping a secret.
+        storage?.removeItem(DRIVER_SETTINGS_STORAGE_KEY);
+      }
+    }
   } catch {
     // storage blocked: nothing was readable, nothing to clean
   }
+}
+
+/**
+ * Old builds received `?spotify_refresh_token=` (or `#...`, `spotify_token`) in the URL after the
+ * OAuth callback. Strip it from the address bar and history entry. The value is never extracted,
+ * read into a variable or stored: only the presence of the parameter name is tested.
+ */
+export function scrubSpotifyTokenFromUrl(
+  location: Pick<Location, "search" | "hash" | "pathname">,
+  history: Pick<History, "replaceState">,
+): boolean {
+  if (!/spotify_refresh_token|spotify_token/.test(`${location.search}${location.hash}`)) return false;
+  try {
+    history.replaceState(null, "", location.pathname);
+  } catch {
+    return false;
+  }
+  return true;
 }

@@ -25,8 +25,17 @@ export function FinnApp() {
       if (document.visibilityState === "visible") void getController().onVisible();
       else getController().onHidden();
     };
+    // Coming back from another page (Spotify consent) through the back/forward cache fires
+    // `pageshow` but not always `visibilitychange`.
+    const onPageShow = () => {
+      if (document.visibilityState === "visible") void getController().onVisible();
+    };
     document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pageshow", onPageShow);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pageshow", onPageShow);
+    };
   }, []);
 
   return (

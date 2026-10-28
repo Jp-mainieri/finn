@@ -11,7 +11,7 @@ import { DelegationHandler } from "./delegation-handler";
 import { getDriverSettings } from "./driver-settings";
 import { LOCAL_SPEECH } from "./failure-speech";
 import { redeemInvite, type InviteResult } from "./invite-client";
-import { purgeLegacyDriverSettings } from "./legacy-cleanup";
+import { purgeLegacyDriverSettings, scrubSpotifyTokenFromUrl } from "./legacy-cleanup";
 import { disconnect as disconnectSpotify, fetchConnection, startConnect, type SpotifyState } from "./spotify-connection";
 import { OrchestratorClient, randomId } from "./orchestrator-client";
 import { isRecoverable, VoiceStateMachine, type VoiceError, type VoiceSnapshot } from "./state-machine";
@@ -67,6 +67,11 @@ export class VoiceController {
   private openAfterClose: PendingAction | null = null;
   private disposed = false;
   private settingsOpen = false;
+  /** Bumped whenever the signed-in driver changes (sign out, new invite, rejected session). */
+  private epoch = 0;
+  /** Latest Spotify request wins; older answers are dropped. */
+  private spotifySeq = 0;
+  private spotifyAbort: AbortController | null = null;
 
   constructor(private readonly tokens: TokenStore) {
     // Old builds kept the Spotify refresh token and typed addresses here; remove them (once per load).
@@ -76,6 +81,8 @@ export class VoiceController {
       } catch {
         // storage blocked
       }
+      // A callback of the old flow left the refresh token in the address bar: strip it, unread.
+      if (window.location && window.history) scrubSpotifyTokenFromUrl(window.location, window.history);
     }
     this.orchestrator = new OrchestratorClient({
       getToken: () => tokens.get(),
@@ -85,6 +92,7 @@ export class VoiceController {
       orchestrator: this.orchestrator,
       speak: (id, text) => this.session?.speak(id, text),
       speakLocal: (text) => this.session?.speakLocal?.(text),
+      sessionEpoch: () => this.epoch,
       onWorkStarted: () => this.machine.dispatch({ type: "WORK_STARTED" }),
       onWorkFinished: () => this.machine.dispatch({ type: "WORK_FINISHED" }),
       onTurn: ({ response }) => {
@@ -134,7 +142,8 @@ export class VoiceController {
   /** "Entrar com outro convite": reopens the invite screen; the saved token stays until a new one is redeemed. */
   openInvite(): void {
     this.endTrip();
-    this.update({ needsToken: true, tokenRejected: false, canCancelInvite: Boolean(this.tokens.get()), spotify: { status: "unknown" } });
+    this.leaveDriver();
+    this.update({ needsToken: true, tokenRejected: false, canCancelInvite: Boolean(this.tokens.get()) });
   }
 
   cancelInvite(): void {
@@ -142,7 +151,8 @@ export class VoiceController {
   }
 
   private afterTokenSaved(): void {
-    this.update({ needsToken: !this.tokens.get(), tokenRejected: false, canCancelInvite: false, spotify: { status: "unknown" } });
+    this.leaveDriver();
+    this.update({ needsToken: !this.tokens.get(), tokenRejected: false, canCancelInvite: false });
     // The mic is still open after a 401 mid-trip: go straight back to listening.
     const { state, error } = this.machine.current;
     if (state === "error" && error?.kind === "unauthorized" && this.audio?.micAlive) {
@@ -154,7 +164,37 @@ export class VoiceController {
   signOut(): void {
     this.tokens.clear();
     this.endTrip();
-    this.update({ needsToken: true, tokenRejected: false, canCancelInvite: false, spotify: { status: "unknown" } });
+    this.leaveDriver();
+    this.update({ needsToken: true, tokenRejected: false, canCancelInvite: false });
+  }
+
+  /**
+   * The previous driver is gone (or changing): cancel any Spotify navigation or request in flight,
+   * drop late answers (epoch) and clear everything on screen that belonged to them.
+   */
+  private leaveDriver(): void {
+    this.epoch += 1;
+    this.spotifySeq += 1;
+    this.spotifyAbort?.abort();
+    this.spotifyAbort = null;
+    this.update({ userText: "", assistantText: "", pendingActions: [], spotify: { status: "unknown" } });
+  }
+
+  /** Starts one Spotify request; the answer is applied only if it is still the latest and the driver is the same. */
+  private async spotifyRequest(run: (opts: { signal: AbortSignal }, epoch: number) => Promise<SpotifyState>): Promise<void> {
+    this.spotifyAbort?.abort();
+    const abort = new AbortController();
+    this.spotifyAbort = abort;
+    const seq = ++this.spotifySeq;
+    const epoch = this.epoch;
+    this.update({ spotify: { status: "loading" } });
+    const next = await run({ signal: abort.signal }, epoch);
+    if (seq !== this.spotifySeq || epoch !== this.epoch) return;
+    if (next.status === "unauthorized") {
+      this.requireToken();
+      return;
+    }
+    this.update({ spotify: next });
   }
 
   // --- Spotify connection (the refresh token never reaches the phone) ----------------
@@ -166,19 +206,24 @@ export class VoiceController {
   }
 
   async refreshSpotify(): Promise<void> {
-    this.update({ spotify: { status: "loading" } });
-    this.update({ spotify: await fetchConnection(this.tokens.get()) });
+    await this.spotifyRequest((opts) => fetchConnection(this.tokens.get(), opts));
   }
 
   async connectSpotify(): Promise<void> {
-    this.update({ spotify: { status: "loading" } });
-    const next = await startConnect(this.tokens.get(), (url) => window.location.assign(url));
-    this.update({ spotify: next });
+    await this.spotifyRequest((opts, epoch) =>
+      startConnect(
+        this.tokens.get(),
+        (url) => {
+          // Never navigate for a driver who has left, or after a newer request replaced this one.
+          if (epoch === this.epoch && !opts.signal.aborted) window.location.assign(url);
+        },
+        opts,
+      ),
+    );
   }
 
   async disconnectSpotify(): Promise<void> {
-    this.update({ spotify: { status: "loading" } });
-    this.update({ spotify: await disconnectSpotify(this.tokens.get()) });
+    await this.spotifyRequest((opts) => disconnectSpotify(this.tokens.get(), opts));
   }
 
   /** Must be called from a tap: unlocks audio (iOS) and asks for the mic once. */
@@ -446,7 +491,10 @@ export class VoiceController {
     this.machine.dispatch({ type: "FAILED", error });
   }
 
+  /** The server refused this session (401): forget the token and go back to the invite screen. */
   private requireToken(): void {
+    this.tokens.clear();
+    this.leaveDriver();
     this.update({ needsToken: true, tokenRejected: true, canCancelInvite: false });
   }
 

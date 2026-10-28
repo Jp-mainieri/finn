@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDriverSettings, getDriverSettings, saveDriverSettings } from "./driver-settings";
 import { DRIVER_SETTINGS_STORAGE_KEY } from "./config";
 
@@ -8,6 +8,7 @@ function memoryStorage() {
     getItem: (k: string) => data.get(k) ?? null,
     setItem: (k: string, v: string) => void data.set(k, v),
     removeItem: (k: string) => void data.delete(k),
+    dump: () => data.values(),
   };
 }
 
@@ -49,10 +50,19 @@ describe("driver-settings", () => {
     expect(raw).not.toContain("spotifyRefreshToken");
   });
 
-  it("does not take a Spotify token from the URL", () => {
-    // The old build read ?spotify_refresh_token= and #spotify_refresh_token=; that path is gone.
-    const settings = getDriverSettings(getStorage);
-    expect(Object.keys(settings).sort()).toEqual(["ttsMode", "voiceProvider"]);
+  it("does not take a Spotify token from the URL (query or hash) into the settings or storage", () => {
+    vi.stubGlobal("window", {
+      location: { search: "?spotify_refresh_token=URL-SECRET", hash: "#spotify_token=URL-SECRET2", pathname: "/" },
+      dispatchEvent: () => true,
+    });
+    try {
+      const settings = getDriverSettings(getStorage);
+      saveDriverSettings({ ttsMode: "openai" }, getStorage);
+      expect(JSON.stringify(settings)).not.toContain("URL-SECRET");
+      expect([...storage.dump()].join("")).not.toContain("URL-SECRET");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("clears the stored settings", () => {

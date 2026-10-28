@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { statusText, wakeWordNotice } from "./status";
+import { TOKEN_STORAGE_KEY } from "./config";
 import { TokenStore } from "./token-store";
 
 function memoryStorage() {
@@ -71,5 +72,27 @@ describe("status", () => {
     expect(wakeWordNotice({ available: "loading" })).toBeNull();
     expect(wakeWordNotice({ available: true })).toBeNull();
     expect(wakeWordNotice({ available: false, reason: "missing-files" })).toMatch(/não configurada/);
+  });
+
+  it.each([
+    ["a malformed session token", "v1.<script>"],
+    ["a session-looking token with a space", "v1.abc def"],
+    ["a token with a newline", "legacy\ntoken"],
+    ["a token with a non-Latin-1 character", "legacy\u2603"],
+    ["an oversized token", "a".repeat(1025)],
+  ])("discards %s found in storage (so the invite screen shows)", (_n, bad) => {
+    const storage = memoryStorage();
+    storage.setItem(TOKEN_STORAGE_KEY, bad);
+    const store = new TokenStore(() => storage);
+    expect(store.get()).toBeNull();
+    expect(storage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
+  });
+
+  it("still uses a legacy FINN_API_TOKEN (any printable ASCII) and a well-formed session token", () => {
+    const storage = memoryStorage();
+    storage.setItem(TOKEN_STORAGE_KEY, "legacy-Api_Token.123");
+    expect(new TokenStore(() => storage).get()).toBe("legacy-Api_Token.123");
+    storage.setItem(TOKEN_STORAGE_KEY, "v1.eyJhIjoxfQ.c2ln");
+    expect(new TokenStore(() => storage).get()).toBe("v1.eyJhIjoxfQ.c2ln");
   });
 });

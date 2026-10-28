@@ -22,11 +22,11 @@ Os agentes também são expostos via A2A (JSON-RPC `message/send`) para chamadas
 
 | Rota | O quê |
 | --- | --- |
-| `POST /api/orchestrator` | Entrada do PWA (`OrchestratorRequest` → `OrchestratorResponse`) |
+| `POST /api/orchestrator` | Entrada do PWA (`OrchestratorRequest` → `OrchestratorResponse`). Limite por motorista (`orchestrator`): 20/min por instância, 600/dia (Redis, dia de São Paulo); 429 com `scope` `burst` ou `day`. |
 | `POST /api/agents/{spotify,waze}` | Endpoint de task A2A (exige `Authorization: Bearer <FINN_A2A_TOKEN>`; desligado sem a variável válida) |
-| `POST /api/realtime/transcribe` | Transcrição de voz (Groq `whisper-large-v3-turbo` ou OpenAI `gpt-4o-mini-transcribe`) |
-| `POST /api/realtime/tts` | Síntese de voz HD opcional (`gpt-4o-mini-tts`) |
-| `POST /api/realtime/session` | Troca SDP do WebRTC com o GPT-Live-1 (desativado por padrão; exige `ENABLE_GPT_LIVE=1`) |
+| `POST /api/realtime/transcribe` | Transcrição de voz (Groq `whisper-large-v3-turbo` ou OpenAI `gpt-4o-mini-transcribe`). Limite por motorista (`stt`): 20/min por instância, 600/dia (Redis, dia de São Paulo); 429 com `scope` `burst` ou `day`. |
+| `POST /api/realtime/tts` | Síntese de voz HD opcional (`gpt-4o-mini-tts`). Limite por motorista (`tts`): 20/min por instância, 600/dia (Redis, dia de São Paulo); 429 com `scope` `burst` ou `day`. |
+| `POST /api/realtime/session` | Troca SDP do WebRTC com o GPT-Live-1 (desativado por padrão; exige `ENABLE_GPT_LIVE=1`). Limite por motorista (`live`): 5/min por instância, 30/dia (Redis, dia de São Paulo); 429 com `scope` `burst` ou `day`. |
 | `GET /api/spotify/login` → `/callback` | OAuth do Spotify (suporta tanto setup do servidor quanto conexão por motorista no PWA) |
 | `GET /agents/{spotify,waze}/.well-known/agent.json` | Agent Card (rewrite → `/api/agents/[agent]/card`) |
 

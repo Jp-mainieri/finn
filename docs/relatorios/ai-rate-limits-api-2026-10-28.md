@@ -10,7 +10,7 @@ Agente: api (Sonnet). Branch `feat/ai-rate-limits`. Contrato: `docs/contratos/li
 - Docs: ARCHITECTURE (tabela de rotas) e ESTADO_ATUAL (débito 16 resolvido, tetos e onde mudar).
 
 ## Comandos e contagens
-`npm test`: 59 arquivos passaram, 1 pulado; 1206 testes passaram, 4 pulados. `npm run typecheck`, `npm run lint`, `npm run build`: sem erros. Rodados uma vez, no fim.
+`npm test` (após o ajuste de ordem): 59 arquivos passaram, 1 pulado; 1211 testes passaram, 4 pulados (antes do ajuste: 1206). `npm run typecheck`, `npm run lint`, `npm run build`: sem erros. Rodados uma vez, no fim.
 
 ## Mutações (cópia fora do repositório, scratchpad; árvore intocada)
 Mataram: remover o limite de orchestrator, stt, tts e live (11 a 12 testes cada); chave por `contextId` no orchestrator (1 teste); limite antes de `authorizeDriver` (12); falhar aberto para motorista (4); 429 chamando o serviço (5); rajada vence dia quando ambos estouram (4); dia em UTC (9); sem teto de 1000 no mapa (3); dono falhando fechado (8); log com stack e scope extra (4); limite antes do `ENABLE_GPT_LIVE` (14); TTL do dia alterado (4, depois de eu ter fixado o TTL em teste).
@@ -26,11 +26,18 @@ Obs.: a mutação por `contextId` derruba só 1 teste, mas ele cobre as 4 rotas 
 
 ## Desvios
 1. O store recusava `windowSeconds` > 86400 (hardening anterior), mas o contrato manda TTL 90000. Subi o teto do store para 90000 e ajustei o teste que fixava 86401. Sem isso, toda requisição de IA daria 503.
-2. Requisição barrada por rajada também incrementa o contador do dia (um comando de Redis por requisição, "toda requisição conta"); é o que permite `scope: "day"` quando ambos estouram.
+2. (Superado pelo ajuste de ordem abaixo.)
 3. `driverId` ou classe inválidos viram 503 sem tocar contador (falha fechada); o contrato só diz que nunca viram chave.
 4. Dono com Redis fora: um aviso fixo `[ai-limit] <classe> day counter unavailable`, sem id nem chave.
 
 ## Decisões para o dono
-- Aceitar subir o teto de `windowSeconds` do store para 25 h (desvio 1).
-- Rajadas barradas gastam cota do dia: ok, ou preferir não contar? (um loop de cliente com bug queima o dia mesmo bloqueado.)
+- Teto de `windowSeconds` do store em 25 h (desvio 1): aprovado pelo orquestrador; fronteira testada (90000 aceito, 90001 recusado).
+- Rajada barrada gastar cota do dia: resolvido pelo orquestrador (ver "Ajuste de ordem").
 - Commits: 0183c49, 6901d91, 4993764 e um de docs.
+
+## Ajuste de ordem (decisão do orquestrador, última linha do Histórico do contrato)
+- `enforceAiLimit`: a rajada é checada primeiro; se estourou, 429 `scope: "burst"` sem chamar `incrementRateLimit` (nenhum comando do Upstash, nenhuma cota do dia). O dia só conta o que passou pela rajada; `scope: "day"` só aparece em requisição que passou. Malformadas (400/413) continuam contando. Com Redis fora, quem a rajada barra recebe 429, não 503. A chave inválida continua dando 503 antes de qualquer contagem.
+- Testes: removido o caso "os dois estouram, day". Novos: loop de 30 requisições gera exatamente 20 incrementos (espião do store) e o contador do dia fica em 20; com o dia já estourado, a rajada vence e o store não é chamado; Redis fora + rajada = 429. Contagens de 400/413 agora esperam 20 (5 em `live`) no dia, não 21. `hardening.test.ts` prova 90000 aceito e 90001 recusado (memória e Upstash fake).
+- Mutações (cópia fora do repositório): incrementar sempre o dia (sem o retorno antecipado da rajada) derrubou 22 testes (N1, N2 e N3 são a mesma alteração em três formas; reportadas juntas); remover o limite de stt, 14; falhar aberto para motorista, 4; chave por `contextId`, 1. Nenhuma sobrevivente.
+- Lote final: `npm test` 1211 passaram e 4 pulados; typecheck, lint e build sem erros.
+- `docs/ARCHITECTURE.md` não descreve a ordem; não mudou.

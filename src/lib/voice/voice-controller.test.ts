@@ -2,10 +2,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DRIVER_SETTINGS_STORAGE_KEY, TOKEN_STORAGE_KEY } from "./config";
 import type { DelegationHandler } from "./delegation-handler";
 import { LOCAL_SPEECH } from "./failure-speech";
+import { isRecoverable } from "./state-machine";
 import { TokenStore } from "./token-store";
 import type { TranscriptBuffer } from "./transcript-buffer";
 import { VoiceController } from "./voice-controller";
-import type { VoiceSession } from "./voice-session";
+import { DayLimitedError, RateLimitedError, UnavailableError, type VoiceSession } from "./voice-session";
+
+/** `openSession` builds a real SttTtsVoiceSession; this double lets a test decide how `connect()` ends. */
+const sessionDouble = vi.hoisted(() => ({ connect: (): Promise<void> => Promise.resolve() }));
+vi.mock("./stt-tts-session", () => ({
+  SttTtsVoiceSession: class {
+    connect() {
+      return sessionDouble.connect();
+    }
+    async close() {}
+    speak() {
+      return "evt";
+    }
+  },
+}));
 
 /**
  * The VoiceController runs in the node environment with a stubbed `window` and `fetch`:
@@ -399,6 +414,54 @@ describe("VoiceController", () => {
       fetchMock.mockResolvedValueOnce(json({ scope: "burst" }, 429));
       await internals(c).greetDriver(session);
       expect(session.speakLocal).toHaveBeenCalledExactlyOnceWith(LOCAL_SPEECH.rate_limited);
+    });
+  });
+
+  describe("connecting the session fails with a limit error", () => {
+    /** Runs the controller's real `openSession` with a session whose `connect()` rejects. */
+    async function connectFailing(error: Error) {
+      const c = make("v1.t");
+      sessionDouble.connect = () => Promise.reject(error);
+      Object.assign(c as unknown as Record<string, unknown>, {
+        audio: {
+          stream: {},
+          micTrack: { readyState: "live" },
+          micAlive: true,
+          detachRemote() {},
+          earcon() {},
+          setFrameSink() {},
+          release() {},
+          resume: async () => {},
+        },
+      });
+      await (c as unknown as { openSession: () => Promise<void> }).openSession();
+      return c;
+    }
+
+    it.each([
+      ["a daily limit", new DayLimitedError(), LOCAL_SPEECH.day_limited],
+      ["a rate limit", new RateLimitedError(), LOCAL_SPEECH.rate_limited],
+      ["a 503", new UnavailableError(), LOCAL_SPEECH.unavailable],
+    ])("%s shows its own fixed line, as a recoverable connect error, not the generic one", async (_n, error, line) => {
+      const c = await connectFailing(error);
+      const { state, error: err } = c.getView().voice;
+      expect(state).toBe("error");
+      expect(err).toEqual({ kind: "connect-failed", message: line });
+      expect(isRecoverable(err)).toBe(true);
+      expect(line).not.toBe("Não consegui conectar. Toque para tentar de novo.");
+      c.dispose();
+    });
+
+    it("any other error keeps the generic connect message and logs only a fixed text plus the error", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const c = await connectFailing(new Error("boom"));
+      expect(c.getView().voice.error).toEqual({ kind: "connect-failed", message: "Não consegui conectar. Toque para tentar de novo." });
+      warn.mockRestore();
+      c.dispose();
+    });
+
+    it("the three limit lines are distinct", () => {
+      expect(new Set([LOCAL_SPEECH.day_limited, LOCAL_SPEECH.rate_limited, LOCAL_SPEECH.unavailable]).size).toBe(3);
     });
   });
 });

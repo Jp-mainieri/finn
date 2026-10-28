@@ -34,9 +34,11 @@ const T0 = Date.UTC(2026, 9, 28, 15, 0, 0);
 
 class SpyStore extends MemoryDriverStore {
   incs: string[] = [];
+  windows: number[] = [];
   down: Error | null = null;
   async incrementRateLimit(key: string, windowSeconds: number): Promise<number> {
     this.incs.push(key);
+    this.windows.push(windowSeconds);
     if (this.down) throw this.down;
     return super.incrementRateLimit(key, windowSeconds);
   }
@@ -159,6 +161,12 @@ describe.each(NAMES)("%s", (name) => {
     expect(store.incs).toEqual([]);
     expect(burstEntryCountForTests()).toBe(0);
     expect(serviceCalls()).toBe(0);
+  });
+
+  it("the day counter lives 90000 s (25 h)", async () => {
+    const a = await newDriver();
+    await call(name, a.token);
+    expect(store.windows).toEqual([90000]);
   });
 
   it("legacy token maps to the owner and is counted as the owner", async () => {

@@ -97,3 +97,4 @@ Limite por IP e força bruta de Bearer (A3), custo por token ou por segundo de �
 
 - 2026-10-28: rascunho.
 - 2026-10-28: aprovado pelo dono, sem alterações.
+- 2026-10-28 (após a entrega do `api`, decisão técnica do orquestrador): a **rajada é checada primeiro**; se estourou, responde 429 `scope: "burst"` e **não toca no Redis** (não incrementa o dia). O dia conta só as requisições que a rajada deixou passar, as únicas que poderiam custar. Motivo: sem isso um loop de cliente com bug queima a cota do dia em segundos mesmo bloqueado, e cada requisição barrada gasta um comando do Upstash. Substitui "se os dois estouram, `scope: day`" (agora `burst` vence quando a rajada estoura; `day` só aparece em requisição que passou pela rajada). Malformadas (400/413) continuam contando nos dois.

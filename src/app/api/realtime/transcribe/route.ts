@@ -1,4 +1,5 @@
 import { authorizeDriver } from "@/lib/auth";
+import { enforceAiLimit } from "@/lib/ai-limits";
 import { optionalEnv } from "@/lib/env";
 
 const GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
@@ -9,6 +10,9 @@ const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // 10 MB limit for voice commands
 export async function POST(request: Request) {
   const auth = await authorizeDriver(request);
   if (auth instanceof Response) return auth;
+
+  const limited = await enforceAiLimit("stt", auth.driverId);
+  if (limited) return limited;
 
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   if (contentLength > MAX_AUDIO_BYTES * 1.5) {

@@ -1,4 +1,5 @@
 import { agents } from "@/agents/registry";
+import { enforceAiLimit } from "@/lib/ai-limits";
 import { authorizeDriver } from "@/lib/auth";
 import { boundedContinuation } from "@/lib/continuation";
 import type { OrchestratorRequest } from "@/lib/contracts/client-events";
@@ -7,6 +8,9 @@ import { orchestrate } from "@/orchestrator/orchestrate";
 export async function POST(request: Request) {
   const auth = await authorizeDriver(request);
   if (auth instanceof Response) return auth;
+
+  const limited = await enforceAiLimit("orchestrator", auth.driverId);
+  if (limited) return limited;
 
   let body: Partial<OrchestratorRequest>;
   try {

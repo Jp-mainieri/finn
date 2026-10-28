@@ -1,4 +1,5 @@
 import { authorizeDriver } from "@/lib/auth";
+import { enforceAiLimit } from "@/lib/ai-limits";
 import { optionalEnv } from "@/lib/env";
 
 const OPENAI_SPEECH_URL = "https://api.openai.com/v1/audio/speech";
@@ -70,6 +71,9 @@ export function splitIntoTtsChunks(text: string, maxChunkLen = 180): string[] {
 export async function POST(request: Request) {
   const auth = await authorizeDriver(request);
   if (auth instanceof Response) return auth;
+
+  const limited = await enforceAiLimit("tts", auth.driverId);
+  if (limited) return limited;
 
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   if (contentLength > MAX_BODY_BYTES) {

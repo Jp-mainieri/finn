@@ -368,4 +368,37 @@ describe("VoiceController", () => {
       expect(session.speak).not.toHaveBeenCalled();
     });
   });
+
+  describe("daily limit (429 with scope 'day')", () => {
+    const dayBody = () => json({ error: "Too many requests", scope: "day" }, 429);
+
+    it("is spoken with speakLocal on a delegation, never with the networked speak", async () => {
+      const c = make("v1.t");
+      const session = fakeSession();
+      internals(c).session = session;
+      fetchMock.mockResolvedValueOnce(dayBody());
+      await delegate(c);
+      expect(session.speakLocal).toHaveBeenCalledExactlyOnceWith(LOCAL_SPEECH.day_limited);
+      expect(session.speak).not.toHaveBeenCalled();
+    });
+
+    it("is spoken with speakLocal on the greeting", async () => {
+      const c = make("v1.t");
+      const session = fakeSession();
+      internals(c).session = session;
+      fetchMock.mockResolvedValueOnce(dayBody());
+      await internals(c).greetDriver(session);
+      expect(session.speakLocal).toHaveBeenCalledExactlyOnceWith(LOCAL_SPEECH.day_limited);
+      expect(session.speak).not.toHaveBeenCalled();
+    });
+
+    it("scope 'burst' on the greeting is still the generic line", async () => {
+      const c = make("v1.t");
+      const session = fakeSession();
+      internals(c).session = session;
+      fetchMock.mockResolvedValueOnce(json({ scope: "burst" }, 429));
+      await internals(c).greetDriver(session);
+      expect(session.speakLocal).toHaveBeenCalledExactlyOnceWith(LOCAL_SPEECH.rate_limited);
+    });
+  });
 });

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OrchestratorResponse } from "@/lib/contracts/client-events";
 import { DelegationHandler, SPEECH } from "./delegation-handler";
+import { LOCAL_SPEECH } from "./failure-speech";
 import { OrchestratorClient } from "./orchestrator-client";
 import { TranscriptBuffer } from "./transcript-buffer";
 
@@ -105,6 +106,26 @@ describe("DelegationHandler", () => {
     await run(handler.handle({ id: "del_1", offsetMs: 1_000 }));
     expect(spoken).toEqual([["del_1", SPEECH.unavailable]]);
     expect(deps.onFailure).toHaveBeenCalledWith("server", "toca rock");
+  });
+
+  it("a 429 with scope 'day' is spoken locally with the daily-limit line, never the generic one", async () => {
+    const { transcripts, spoken, deps } = setup(Response.json({ error: "Too many requests", scope: "day" }, { status: 429 }));
+    const local: string[] = [];
+    const withLocal = new DelegationHandler({ ...deps, speakLocal: (t) => void local.push(t) });
+    transcripts.add({ delta: "toca rock", startMs: 0, endMs: 500 });
+    await run(withLocal.handle({ id: "del_1", offsetMs: 1_000 }));
+    expect(local).toEqual(["Você atingiu o limite de uso de hoje. Volte amanhã."]);
+    expect(spoken).toEqual([]);
+    expect(deps.onFailure).toHaveBeenCalledWith("day_limited", "toca rock");
+  });
+
+  it("a 503 never speaks the daily-limit line, even with scope 'day' in the body", async () => {
+    const { transcripts, deps } = setup(Response.json({ scope: "day" }, { status: 503 }));
+    const local: string[] = [];
+    const withLocal = new DelegationHandler({ ...deps, speakLocal: (t) => void local.push(t) });
+    transcripts.add({ delta: "toca rock", startMs: 0, endMs: 500 });
+    await run(withLocal.handle({ id: "del_1", offsetMs: 1_000 }));
+    expect(local).toEqual([LOCAL_SPEECH.unavailable]);
   });
 
   it.each([

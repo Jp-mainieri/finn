@@ -254,4 +254,36 @@ describe("SttTtsVoiceSession session lifecycle & VAD", () => {
     expect(fetchMock.mock.calls.map(([u]) => u)).not.toContain("/api/realtime/tts");
     vi.useRealTimers();
   });
+
+  it("a transcribe 429 with scope 'day' speaks the daily-limit line locally; 'DAY' stays generic", async () => {
+    for (const [scope, line] of [
+      ["day", "Você atingiu o limite de uso de hoje. Volte amanhã."],
+      ["DAY", "Muitas tentativas, tente de novo em instantes."],
+    ] as const) {
+      vi.useFakeTimers();
+      fetchMock.mockReset();
+      (handlers.onAssistantTranscript as ReturnType<typeof vi.fn>).mockClear();
+      fetchMock.mockResolvedValueOnce(Response.json({ error: "Too many requests", scope }, { status: 429 }));
+      const session = new SttTtsVoiceSession({
+        audio: mockAudio as unknown as AudioIO,
+        getToken: () => "s3cret",
+        getTtsMode: () => "openai",
+        handlers,
+        fetchImpl: fetchMock,
+      });
+      await session.connect();
+      for (let i = 0; i < 12; i++) {
+        vi.advanceTimersByTime(32);
+        session.processFrame(new Int16Array(512).fill(2000));
+      }
+      for (let i = 0; i < 30; i++) {
+        vi.advanceTimersByTime(32);
+        session.processFrame(new Int16Array(512));
+      }
+      await vi.runAllTimersAsync();
+      expect(handlers.onAssistantTranscript).toHaveBeenCalledWith(expect.objectContaining({ delta: line }));
+      expect(fetchMock.mock.calls.map(([u]) => u)).not.toContain("/api/realtime/tts");
+      vi.useRealTimers();
+    }
+  });
 });

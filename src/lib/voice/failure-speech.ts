@@ -7,16 +7,73 @@
  * Wording is a proposal from the contract (pwa-convite-e-dono.md), owner decides.
  */
 
-export type ServerFailureKind = "rate_limited" | "unavailable";
+export type ServerFailureKind = "rate_limited" | "day_limited" | "unavailable";
 
 export const LOCAL_SPEECH = {
   rate_limited: "Muitas tentativas, tente de novo em instantes.",
+  day_limited: "Você atingiu o limite de uso de hoje. Volte amanhã.",
   unavailable: "O Finn está fora do ar agora, tente de novo daqui a pouco.",
 } as const satisfies Record<ServerFailureKind, string>;
 
-/** 429 -> rate_limited, 503 -> unavailable, anything else is not one of the two. */
-export function serverFailureKind(status: number): ServerFailureKind | null {
-  if (status === 429) return "rate_limited";
-  if (status === 503) return "unavailable";
-  return null;
+/** The 429 body is `{ error, scope }`, a few dozen bytes; anything bigger is not read. */
+const MAX_BODY_BYTES = 1024;
+const BODY_DEADLINE_MS = 1500;
+
+/**
+ * Reads the `scope` of an AI-route 429 (`"burst" | "day"`). Only the exact string "day" counts;
+ * missing body, non-JSON, huge body, slow body, other values: undefined. Never throws.
+ * The text spoken is always the fixed local one; nothing from the body is ever shown or spoken.
+ */
+async function readScope(res: Response): Promise<string | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const reader = res.body?.getReader();
+    if (!reader) return undefined;
+    const read = (async () => {
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > MAX_BODY_BYTES) {
+          await reader.cancel().catch(() => undefined);
+          return undefined;
+        }
+        chunks.push(value);
+      }
+      const bytes = new Uint8Array(total);
+      let at = 0;
+      for (const c of chunks) {
+        bytes.set(c, at);
+        at += c.byteLength;
+      }
+      const body: unknown = JSON.parse(new TextDecoder().decode(bytes));
+      if (!body || typeof body !== "object") return undefined;
+      const scope = (body as { scope?: unknown }).scope;
+      return typeof scope === "string" ? scope : undefined;
+    })();
+    const deadline = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => {
+        void reader.cancel().catch(() => undefined);
+        resolve(undefined);
+      }, BODY_DEADLINE_MS);
+    });
+    return await Promise.race([read, deadline]);
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Failure kind for a response from an AI route: 503 -> unavailable; 429 -> day_limited when the
+ * body says `scope === "day"` (strict), otherwise rate_limited; anything else null.
+ * The body is read only for a 429. Not for the invite or Spotify routes (no "day" scope there).
+ */
+export async function classifyServerFailure(res: Response): Promise<ServerFailureKind | null> {
+  if (res.status === 503) return "unavailable";
+  if (res.status !== 429) return null;
+  return (await readScope(res)) === "day" ? "day_limited" : "rate_limited";
 }

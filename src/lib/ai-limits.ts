@@ -10,9 +10,9 @@
  * Nothing here logs a driverId, a key or a count: a stalled request only logs the route class and the scope.
  */
 import { isOwner } from "@/lib/auth";
-import { getDriverStore, isValidDriverId, type DriverStore } from "@/lib/driver";
+import { DriverStoreUnavailableError, getDriverStore, isValidDriverId, type DriverStore } from "@/lib/driver";
 
-export type AiClass = "stt" | "orchestrator" | "tts" | "live";
+export type AiClass = "stt" | "orchestrator" | "tts" | "live" | "a2a";
 
 /** burst = requests per BURST_WINDOW_SECONDS (per instance); day = requests per calendar day (Redis). */
 export const AI_LIMITS: Readonly<Record<AiClass, { readonly burst: number; readonly day: number }>> = {
@@ -20,6 +20,8 @@ export const AI_LIMITS: Readonly<Record<AiClass, { readonly burst: number; reado
   orchestrator: { burst: 20, day: 600 },
   tts: { burst: 20, day: 600 },
   live: { burst: 5, day: 30 },
+  /** POST /api/agents/[agent]: runs as the owner, same ceilings as the orchestrator it mirrors. */
+  a2a: { burst: 20, day: 600 },
 };
 
 export const BURST_WINDOW_SECONDS = 60;
@@ -38,6 +40,7 @@ const burst = new Map<string, { count: number; resetAt: number }>();
 export function resetAiLimitsForTests(now?: Clock): void {
   clock = now ?? Date.now;
   burst.clear();
+  lastWarn.clear();
 }
 
 /** Test hook: size of the in-memory burst map. */
@@ -66,11 +69,11 @@ export function saoPauloDay(nowMs: number): { day: string; secondsToMidnight: nu
   return { day: `${parts.year}${parts.month}${parts.day}`, secondsToMidnight: Math.min(86400, Math.max(1, remaining)) };
 }
 
-const CLASS_RE = /^[a-z]{1,20}$/;
+const CLASS_RE = /^[a-z0-9]{1,20}$/;
 
 /** `ratelimit:ai:<class>:<AAAAMMDD>:<driverId>`; throws on anything that would not be a clean key. */
 export function aiDayKey(cls: string, day: string, driverId: string): string {
-  if (!CLASS_RE.test(cls) || !(cls in AI_LIMITS) || !/^\d{8}$/.test(day) || !isValidDriverId(driverId)) {
+  if (!CLASS_RE.test(cls) || !Object.hasOwn(AI_LIMITS, cls) || !/^\d{8}$/.test(day) || !isValidDriverId(driverId)) {
     throw new Error("Invalid rate limit key part");
   }
   return `ratelimit:ai:${cls}:${day}:${driverId}`;
@@ -104,8 +107,21 @@ function burstHit(cls: AiClass, driverId: string, now: number): { over: boolean;
   };
 }
 
+/** Last warning per class+scope (at most 5 x 3 entries), so a client in a loop writes one log line a minute, not one per request. */
+const lastWarn = new Map<string, number>();
+const WARN_EVERY_MS = 60_000;
+
+function warnOnce(cls: string, what: string): void {
+  const now = clock();
+  const key = `${cls}:${what}`;
+  const last = lastWarn.get(key);
+  if (last !== undefined && now - last >= 0 && now - last < WARN_EVERY_MS) return;
+  lastWarn.set(key, now);
+  console.warn(`[ai-limit] ${cls} ${what}`);
+}
+
 function tooMany(cls: AiClass, scope: Scope, retryAfter: number): Response {
-  console.warn(`[ai-limit] ${cls} over ${scope} limit`);
+  warnOnce(cls, `over ${scope} limit`);
   return Response.json(
     { error: "Too many requests", scope },
     { status: 429, headers: { "Retry-After": String(retryAfter), "Cache-Control": "no-store" } },
@@ -142,9 +158,11 @@ export async function enforceAiLimit(cls: AiClass, driverId: string, deps: { sto
   let dayCount: number | null;
   try {
     dayCount = await (deps.store ?? getDriverStore()).incrementRateLimit(key, DAY_KEY_TTL_SECONDS);
-  } catch {
-    if (!isOwner(driverId)) return unavailable();
-    console.warn(`[ai-limit] ${cls} day counter unavailable`);
+  } catch (err) {
+    // Fail open only for the owner AND only when the store itself reported "unavailable"; any other error
+    // (misconfiguration, a bug) is a 503 for everyone.
+    if (!(err instanceof DriverStoreUnavailableError) || !isOwner(driverId)) return unavailable();
+    warnOnce(cls, "day counter unavailable");
     dayCount = null;
   }
 

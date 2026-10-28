@@ -5,7 +5,9 @@ import { optionalEnv } from "@/lib/env";
 const GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 const OPENAI_TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions";
 const STT_PROMPT = "Finn, Spotify, Waze, toca a playlist, pausa, próxima, me leva pra casa, trabalho.";
-const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // 10 MB limit for voice commands
+// The PWA sends 16 kHz mono 16-bit WAV (32 KB/s) of one utterance: at most 12 s of speech (MAX_UTTERANCE_MS) plus
+// pre-roll, or the manual-turn buffer of 470 frames (15 s) = ~480 KB. The cap is ~2x that, 1 MB (decoded bytes).
+const MAX_AUDIO_BYTES = 1024 * 1024;
 
 export async function POST(request: Request) {
   const auth = await authorizeDriver(request);
@@ -17,7 +19,7 @@ export async function POST(request: Request) {
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   if (contentLength > MAX_AUDIO_BYTES * 1.5) {
     return Response.json(
-      { error: "Audio payload exceeds maximum allowed size (10 MB)" },
+      { error: "Audio payload exceeds maximum allowed size (1 MB)" },
       { status: 413 },
     );
   }
@@ -73,7 +75,7 @@ export async function POST(request: Request) {
     }
     if (buffer.length > MAX_AUDIO_BYTES) {
       return Response.json(
-        { error: "Audio payload exceeds maximum allowed size (10 MB)" },
+        { error: "Audio payload exceeds maximum allowed size (1 MB)" },
         { status: 413 },
       );
     }
@@ -98,7 +100,7 @@ export async function POST(request: Request) {
     }
     if (field.size > MAX_AUDIO_BYTES) {
       return Response.json(
-        { error: "Audio payload exceeds maximum allowed size (10 MB)" },
+        { error: "Audio payload exceeds maximum allowed size (1 MB)" },
         { status: 413 },
       );
     }

@@ -370,6 +370,11 @@ describe("log throttle: one warning per class and scope per minute", () => {
     await call("stt", a.token);
     const warns = vi.mocked(console.warn).mock.calls.map((c) => c.join(" "));
     expect(warns).toEqual(["[ai-limit] tts over burst limit", "[ai-limit] stt over day limit"]);
+    // the same class, the other scope, within the same minute: its own line
+    const b = await newDriver();
+    await seedDay("tts", b.id, AI_LIMITS.tts.day);
+    await call("tts", b.token);
+    expect(vi.mocked(console.warn).mock.calls.map((c) => c.join(" "))).toEqual([...warns, "[ai-limit] tts over day limit"]);
   });
 });
 

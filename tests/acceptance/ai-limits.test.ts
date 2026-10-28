@@ -283,7 +283,10 @@ describe.each(NAMES)("%s", (name) => {
   it("Redis down: a driver gets 503 without the service; the owner passes; logs carry no id, key or count", async () => {
     const a = await newDriver();
     const key = dayKeyNow(cls, a.id);
-    store.down = new Error(`redis boom ${key}`, { cause: new Error(`inner ${a.id} ${key} 599`) });
+    const down = new DriverStoreUnavailableError();
+    down.cause = new Error(`inner ${a.id} ${key} 599`);
+    down.message = `redis boom ${key}`;
+    store.down = down;
     const res = await call(name, a.token);
     expect(res.status).toBe(503);
     expect(serviceCalls()).toBe(0);
@@ -299,6 +302,21 @@ describe.each(NAMES)("%s", (name) => {
     expect(text).not.toContain("ratelimit:");
     expect(text).not.toContain("boom");
     expect(text).not.toContain("inner");
+  });
+
+  it("any other error from the counter is a 503 for the owner too (fail open only for DriverStoreUnavailableError)", async () => {
+    for (const err of [new Error("misconfigured"), new TypeError("bug"), new RangeError("x")]) {
+      store.down = err;
+      const res = await call(name, LEGACY);
+      expect(res.status).toBe(503);
+    }
+    expect(serviceCalls()).toBe(0);
+    const a = await newDriver();
+    store.down = new Error("other");
+    expect((await call(name, a.token)).status).toBe(503);
+    store.down = new DriverStoreUnavailableError();
+    expect((await call(name, a.token)).status).toBe(503);
+    expect(serviceCalls()).toBe(0);
   });
 
   it("owner with Redis down still has the burst ceiling", async () => {
@@ -326,6 +344,62 @@ describe.each(NAMES)("%s", (name) => {
     const warns = vi.mocked(console.warn).mock.calls.map((c) => c.join(" "));
     expect(warns).toEqual([`[ai-limit] ${cls} over day limit`]);
     expect(loggedText()).not.toContain(a.id);
+  });
+});
+
+describe("log throttle: one warning per class and scope per minute", () => {
+  it.each(NAMES)("%s: 100 overflows in a row write one line; after 60 s there is another", async (name) => {
+    const a = await newDriver();
+    for (let i = 0; i < 100; i++) await call(name, a.token);
+    const warns = () => vi.mocked(console.warn).mock.calls.map((c) => c.join(" "));
+    expect(warns()).toEqual([`[ai-limit] ${name} over burst limit`]);
+    t += 59_999;
+    await call(name, a.token);
+    expect(warns().length).toBe(1);
+    t += 1; // exactly 60 s after the line; the burst window renewed too
+    for (let i = 0; i < AI_LIMITS[name].burst + 1; i++) await call(name, a.token);
+    expect(warns()).toEqual([`[ai-limit] ${name} over burst limit`, `[ai-limit] ${name} over burst limit`]);
+    expect(loggedText()).not.toContain(a.id);
+    expect(loggedText()).not.toContain("ratelimit:");
+  });
+
+  it("classes and scopes throttle separately", async () => {
+    const a = await newDriver();
+    for (let i = 0; i < 25; i++) await call("tts", a.token);
+    await seedDay("stt", a.id, AI_LIMITS.stt.day);
+    await call("stt", a.token);
+    const warns = vi.mocked(console.warn).mock.calls.map((c) => c.join(" "));
+    expect(warns).toEqual(["[ai-limit] tts over burst limit", "[ai-limit] stt over day limit"]);
+  });
+});
+
+describe("independence, class guard and rounding", () => {
+  it("each class has its own burst: overflowing stt does not touch tts", async () => {
+    const a = await newDriver();
+    for (let i = 0; i < AI_LIMITS.stt.burst + 3; i++) await call("stt", a.token);
+    expect((await call("stt", a.token)).status).toBe(429);
+    expect((await call("tts", a.token)).status).toBeLessThan(400);
+    expect((await call("orchestrator", a.token)).status).toBeLessThan(400);
+    expect(store.incs.filter((k) => k.includes(":tts:")).length).toBe(1);
+  });
+
+  it.each(["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"])("class %s is never a limit class", async (cls) => {
+    const id = "drv_" + "A".repeat(22);
+    expect(() => aiDayKey(cls, "20261028", id)).toThrow();
+    // @ts-expect-error runtime-only
+    expect((await enforceAiLimit(cls, id))?.status).toBe(503);
+    expect(store.incs).toEqual([]);
+    expect(burstEntryCountForTests()).toBe(0);
+  });
+
+  it("seconds to midnight round up (a few ms before midnight is still 1 s, 1.999 s is 2)", async () => {
+    expect(saoPauloDay(Date.UTC(2026, 9, 29, 2, 59, 58, 1)).secondsToMidnight).toBe(2);
+    expect(saoPauloDay(Date.UTC(2026, 9, 29, 2, 59, 59, 999)).secondsToMidnight).toBe(1);
+    expect(saoPauloDay(Date.UTC(2026, 9, 29, 3, 0, 0, 0)).secondsToMidnight).toBe(86400);
+    const a = await newDriver();
+    t = Date.UTC(2026, 9, 29, 2, 59, 58, 1);
+    await seedDay("tts", a.id, AI_LIMITS.tts.day);
+    expect((await call("tts", a.token)).headers.get("retry-after")).toBe("2");
   });
 });
 
@@ -416,5 +490,23 @@ describe("burst map", () => {
     t += 40_000; // the first 999 expired, id(9000) is alive
     await enforceAiLimit("stt", id(9001), { store });
     expect(burstEntryCountForTests()).toBe(2);
+  });
+
+  it("the cap is 1000 and the oldest entry is the one evicted; a renewed window goes to the end", async () => {
+    expect(BURST_MAX_ENTRIES).toBe(1000);
+    const burst = AI_LIMITS.stt.burst;
+    await enforceAiLimit("stt", id(0), { store });
+    t += 30_000;
+    for (let i = 1; i < BURST_MAX_ENTRIES - 1; i++) await enforceAiLimit("stt", id(i), { store });
+    for (let i = 0; i < burst - 1; i++) await enforceAiLimit("stt", id(1), { store }); // id(1) is at its ceiling
+    t += 31_000; // id(0) expired, the others live until +90 s
+    for (let i = 0; i < burst; i++) expect(await enforceAiLimit("stt", id(0), { store })).toBeNull(); // renewed: now last
+    expect(burstEntryCountForTests()).toBe(BURST_MAX_ENTRIES - 1);
+    await enforceAiLimit("stt", id(5000), { store });
+    expect(burstEntryCountForTests()).toBe(1000);
+    await enforceAiLimit("stt", id(5001), { store }); // full: no expired entry, so the oldest (id 1) is dropped
+    expect(burstEntryCountForTests()).toBe(1000);
+    expect((await enforceAiLimit("stt", id(0), { store }))?.status).toBe(429); // the renewed one survived
+    expect(await enforceAiLimit("stt", id(1), { store })).toBeNull(); // the oldest was evicted: a fresh window
   });
 });

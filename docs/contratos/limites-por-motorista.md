@@ -22,7 +22,7 @@ Esta entrega libera um dos três bloqueios de convites em produção (os outros:
 Dois tetos por rota e por motorista, os dois só no servidor:
 
 - **Rajada** (antiloop): em memória da instância, janela fixa de 60 s. Não usa Redis. Protege contra loop de cliente com bug. Como as instâncias não compartilham memória, é um freio de melhor esforço, não um limite global.
-- **Dia** (custo): contador no Redis (`incrementRateLimit`), janela por **dia de calendário em `America/Sao_Paulo`**. Esta é a garantia de custo.
+- **Dia** (custo): contador no Redis (`incrementRateLimit`), janela por **dia de calendário em `America/Sao_Paulo`**. Esta é a garantia de custo **por requisição**: o teto conta requisições, não o custo de cada uma; o tamanho de entrada tem tetos próprios (histórico, rodada de correções). A cota do Upstash é protegida pela A3, não por este módulo.
 
 | Rota | Classe | Rajada (por 60 s) | Dia |
 |---|---|---|---|
@@ -30,6 +30,7 @@ Dois tetos por rota e por motorista, os dois só no servidor:
 | `POST /api/orchestrator` | `orchestrator` | 20 | 600 |
 | `POST /api/realtime/tts` | `tts` | 20 | 600 |
 | `POST /api/realtime/session` | `live` | 5 | 30 |
+| `POST /api/agents/[agent]` (A2A, só o dono) | `a2a` | 20 | 600 |
 
 Raciocínio: um turno de voz = 1 `stt` + 1 `orchestrator` (+ 1 `tts` se a voz do OpenAI estiver ligada). 600 por dia equivale a um turno a cada 20 s durante 3 horas, acima de qualquer viagem normal. `live` fica bloqueado por padrão (`ENABLE_GPT_LIVE`); o limite só roda depois dessa checagem, para a rota desligada não gastar contador.
 
@@ -52,7 +53,7 @@ Raciocínio: um turno de voz = 1 `stt` + 1 `orchestrator` (+ 1 `tts` se a voz do
 
 ## Rotas fora do escopo
 
-`POST /api/agents/[agent]` (A2A) já tem limitador próprio; `/api/session` e `/api/spotify/*` têm os seus. Falhas de Bearer sem sessão (força bruta de `FINN_API_TOKEN`) e qualquer limite por IP ficam com a A3 (firewall da Vercel); o `FINN_API_TOKEN` sai depois da virada.
+`POST /api/agents/[agent]` (A2A): o limitador próprio só conta falhas de autenticação; o teto de custo vem da classe `a2a` acima. `/api/session` e `/api/spotify/*` têm os seus. Falhas de Bearer sem sessão (força bruta de `FINN_API_TOKEN`) e qualquer limite por IP ficam com a A3 (firewall da Vercel); o `FINN_API_TOKEN` sai depois da virada.
 
 ## Variáveis
 
@@ -99,4 +100,5 @@ Limite por IP e força bruta de Bearer (A3), custo por token ou por segundo de �
 - 2026-10-28: aprovado pelo dono, sem alterações.
 - 2026-10-28 (após a entrega do `api`, decisão técnica do orquestrador): a **rajada é checada primeiro**; se estourou, responde 429 `scope: "burst"` e **não toca no Redis** (não incrementa o dia). O dia conta só as requisições que a rajada deixou passar, as únicas que poderiam custar. Motivo: sem isso um loop de cliente com bug queima a cota do dia em segundos mesmo bloqueado, e cada requisição barrada gasta um comando do Upstash. Substitui "se os dois estouram, `scope: day`" (agora `burst` vence quando a rajada estoura; `day` só aparece em requisição que passou pela rajada). Malformadas (400/413) continuam contando nos dois.
 - 2026-10-28 (rodada de correções do M3, após qa e security-review; decisões técnicas do orquestrador): (1) **A2A entra no M3**: `POST /api/agents/[agent]` chama `enforceAiLimit` com a classe nova `a2a` (mesmos tetos de `orchestrator`) antes de existir `FINN_A2A_TOKEN`; a frase "o A2A já tem limitador próprio" estava errada (o limitador do A2A só conta falhas). (2) **Teto de tamanho de entrada** (custo por requisição): `transcript` do orquestrador com tamanho máximo, e áudio do `transcribe` com teto menor que os 10 MB, calibrado pelo que o PWA realmente envia. (3) Falha aberta do dono só com `DriverStoreUnavailableError` (não com qualquer exceção). Nota: com `FINN_OWNER_DRIVER_ID` real a autenticação do token legado já responde 503 quando o Redis cai, antes do limite; a falha aberta só vale com o id provisório do dono (antes da virada) ou quando só o contador falha. (4) `Object.hasOwn` na checagem da classe. (5) Aviso de log por estouro limitado a um por classe e escopo por minuto e por instância. (6) Aceitos e documentados: eviction do mapa de rajada (exige cerca de 250 motoristas ativos na mesma instância; o dia no Redis segura o custo), Redis lento soma até 2 s + 2 s antes do 503 (sem disjuntor), `Retry-After` do dia errado em 1 h só se o Brasil restaurar o horário de verão, atraso de até 1,5 s na fala quando o corpo do 429 não termina. (7) **Limites de custo que o M3 não resolve**: a requisição barrada pela rajada ainda custa 1 comando do Upstash (a autenticação lê o motorista); um motorista em loop pode esgotar a cota gratuita e derrubar todos para 503. A regra de firewall da A3 **deve cobrir `/api/orchestrator`, `/api/realtime/*` e `/api/agents/*`**, com alerta de uso do Upstash. (8) Convite com `--max-uses N` cria N motoristas com N cotas: usar um convite por convidado (`--max-uses 1`). (9) Testes a acrescentar: classes com rajada independente, ordem de eviction, teto do mapa contra o literal 1000, 503 do motorista com `DriverStoreUnavailableError`, `GptLiveSession` e `VoiceController.connect` com `scope: "day"`, fala local depois de a sessão fechar em `stt-tts-session`.
+- 2026-10-28 (checagem pontual pós-correções; decisões técnicas do orquestrador): (1) **N1 do security-review** (teto de áudio em bytes não limita duração, porque o cliente escolhe o codec): o `transcribe` aceita **só WAV PCM** (cabeçalho RIFF/WAVE válido), calcula a duração pelo cabeçalho e recusa mais de 20 s; sempre encaminha ao provedor com nome `audio.wav` e tipo `audio/wav`, ignorando `mimeType` e nome do cliente; o teto de 1 MB continua. O PWA só envia WAV mono 16 kHz de 16 bits (fala máxima 12 s, buffer manual ~15 s). (2) N2: `transcript` do A2A com o mesmo teto de 2000 caracteres do orquestrador. (3) N3: o A2A **não** herda a falha aberta do dono: contador fora = 503 (o `guardA2A` já falha fechado). (4) Aceitos como débito: N4 (credencial do Upstash errada conta como indisponível; com o id legado o teto de dia fica aberto até a virada), N5 (log limitado esconde o volume de estouros; a detecção depende do alerta de uso do Upstash da A3), N7 (corpo lido antes do teto custa só memória).
 

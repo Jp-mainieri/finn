@@ -22,9 +22,9 @@ Os agentes também são expostos via A2A (JSON-RPC `message/send`) para chamadas
 
 | Rota | O quê |
 | --- | --- |
-| `POST /api/orchestrator` | Entrada do PWA (`OrchestratorRequest` → `OrchestratorResponse`). Limite por motorista (`orchestrator`): 20/min por instância, 600/dia (Redis, dia de São Paulo); 429 com `scope` `burst` ou `day`. |
-| `POST /api/agents/{spotify,waze}` | Endpoint de task A2A (exige `Authorization: Bearer <FINN_A2A_TOKEN>`; desligado sem a variável válida) |
-| `POST /api/realtime/transcribe` | Transcrição de voz (Groq `whisper-large-v3-turbo` ou OpenAI `gpt-4o-mini-transcribe`). Limite por motorista (`stt`): 20/min por instância, 600/dia (Redis, dia de São Paulo); 429 com `scope` `burst` ou `day`. |
+| `POST /api/orchestrator` | Entrada do PWA (`OrchestratorRequest` → `OrchestratorResponse`). `transcript` com no máximo 2000 caracteres (400). Limite por motorista (`orchestrator`): 20/min por instância, 600/dia (Redis, dia de São Paulo); 429 com `scope` `burst` ou `day`. |
+| `POST /api/agents/{spotify,waze}` | Endpoint de task A2A (exige `Authorization: Bearer <FINN_A2A_TOKEN>`; desligado sem a variável válida). Limite por motorista (`a2a`, roda como o dono): 20/min por instância, 600/dia; 429 antes de ler o corpo ou chamar o agente; falha de autenticação não conta |
+| `POST /api/realtime/transcribe` | Transcrição de voz, áudio de no máximo 1 MB decodificado (413) (Groq `whisper-large-v3-turbo` ou OpenAI `gpt-4o-mini-transcribe`). Limite por motorista (`stt`): 20/min por instância, 600/dia (Redis, dia de São Paulo); 429 com `scope` `burst` ou `day`. |
 | `POST /api/realtime/tts` | Síntese de voz HD opcional (`gpt-4o-mini-tts`). Limite por motorista (`tts`): 20/min por instância, 600/dia (Redis, dia de São Paulo); 429 com `scope` `burst` ou `day`. |
 | `POST /api/realtime/session` | Troca SDP do WebRTC com o GPT-Live-1 (desativado por padrão; exige `ENABLE_GPT_LIVE=1`). Limite por motorista (`live`): 5/min por instância, 30/dia (Redis, dia de São Paulo); 429 com `scope` `burst` ou `day`. |
 | `GET /api/spotify/login` → `/callback` | OAuth do Spotify (suporta tanto setup do servidor quanto conexão por motorista no PWA) |

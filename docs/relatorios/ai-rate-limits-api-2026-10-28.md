@@ -41,3 +41,21 @@ Obs.: a mutação por `contextId` derruba só 1 teste, mas ele cobre as 4 rotas 
 - Mutações (cópia fora do repositório): incrementar sempre o dia (sem o retorno antecipado da rajada) derrubou 22 testes (N1, N2 e N3 são a mesma alteração em três formas; reportadas juntas); remover o limite de stt, 14; falhar aberto para motorista, 4; chave por `contextId`, 1. Nenhuma sobrevivente.
 - Lote final: `npm test` 1211 passaram e 4 pulados; typecheck, lint e build sem erros.
 - `docs/ARCHITECTURE.md` não descreve a ordem; não mudou.
+
+## Rodada de correções (qa e security-review)
+**O que mudou**
+1. A2A: `POST /api/agents/[agent]` chama `enforceAiLimit("a2a", dono)` após `guardA2A` e antes do corpo e do agente; classe `a2a` com os tetos do orquestrador (a regex de classe passou a aceitar dígitos). Não criei nem pedi `FINN_A2A_TOKEN`: os testes só o definem no ambiente de teste.
+2. Tetos de entrada: `transcript` até 2000 caracteres (após `trim`), com 400. Escolhi 400 porque é o código das outras validações de campo (`text` do tts, `sdp`, `transcript` vazio); 413 fica para tamanho do corpo bruto. Áudio do `transcribe`: 1 MB decodificado (era 10 MB), no mesmo ponto do 413 atual, valendo para JSON e multipart; o tamanho real é conferido mesmo sem `content-length` (a checagem prévia de `content-length` continua em 1,5 x o teto). Justificativa do 1 MB: o PWA envia WAV mono 16 kHz 16 bits (32 KB/s); a fala dura no máx. 12 s (`MAX_UTTERANCE_MS`) e o buffer do "Pronto" manual tem 470 quadros de 32 ms (15 s), cerca de 480 KB; 2x dá cerca de 960 KB, e o mínimo pedido é 1 MB.
+3. Falha aberta do dono só com `DriverStoreUnavailableError`; qualquer outro erro dá 503, também para o dono.
+4. `Object.hasOwn(AI_LIMITS, cls)`.
+5. Aviso por estouro: no máximo 1 por classe e escopo a cada 60 s por instância, comparando com o relógio injetado, sem timers. O aviso do dono com Redis fora usa o mesmo limitador.
+6. Testes novos: rajada independente por classe, ordem de eviction (a mais antiga sai; janela renovada vai para o fim), teto contra o literal 1000, 503 do motorista com `DriverStoreUnavailableError` e outro erro, `Retry-After` do dia a milissegundos da meia-noite, classes de protótipo, aviso limitado (100 estouros = 1 linha; após 60 s outra; escopos de uma classe separados).
+7. Docs: ARCHITECTURE (A2A, tetos de entrada) e ESTADO_ATUAL (A2A coberto, tetos, `--max-uses 1`, A3 cobrindo as três famílias de rota).
+
+**Comandos e contagens:** lote final abaixo.
+
+**Mutações** (cópia fora do repositório; 16 mais 1 repetida): A2A sem limite (5 testes caíram), limite do A2A antes da autenticação (4), A2A com a classe do orquestrador (3), teto do transcript removido (2) e com erro de uma unidade (2), teto de áudio de volta a 10 MB (4), dono abre com qualquer erro (4), `in` no lugar de `hasOwn` (1), aviso sem limitação (5), limite de 60 s com `<=` (4), `floor` no `Retry-After` (1), eviction do mais novo (1), janela renovada sem ir ao fim (1), teto 1001 (1), rajada única para todas as classes (3). Sobreviveu uma: chave do aviso sem o escopo (a limitação por classe sem escopo); fechei com teste (dois escopos da mesma classe no mesmo minuto) e a mutação passou a morrer (1). Nenhuma sobrevivente final.
+
+**Não verificado:** Upstash real; limite real de corpo na Vercel; áudio real do iPhone (o teto vem do cálculo do formato e dos limites no código do PWA, não de captura real); A3 (firewall) e alerta de cota; qa e security-review não foram repetidos nesta rodada.
+
+**Desvios:** nenhum novo. O teto de áudio é 1 MB (mínimo do brief), acima do cálculo de 2x (cerca de 960 KB). Itens aceitos pelo orquestrador (eviction, Redis lento, horário de verão, atraso de fala do 429) ficam como estão.

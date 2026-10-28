@@ -1,6 +1,6 @@
 # Contrato — limites por motorista nas rotas de IA (M3)
 
-Status: **rascunho para aprovação do dono** (2026-10-28), com 4 decisões embutidas. Base: achado M3 de [`../revisoes/driver-session-routes-security-review.md`](../revisoes/driver-session-routes-security-review.md) e do security-review da entrega 3; pré-requisito da etapa 3 do plano ("rate limit e observabilidade antes do beta").
+Status: **aprovado pelo dono em 2026-10-28** (com as 4 decisões embutidas). Base: achado M3 de [`../revisoes/driver-session-routes-security-review.md`](../revisoes/driver-session-routes-security-review.md) e do security-review da entrega 3; pré-requisito da etapa 3 do plano ("rate limit e observabilidade antes do beta").
 
 ## Objetivo
 
@@ -96,3 +96,4 @@ Limite por IP e força bruta de Bearer (A3), custo por token ou por segundo de �
 ## Histórico de mudanças
 
 - 2026-10-28: rascunho.
+- 2026-10-28: aprovado pelo dono, sem alterações.

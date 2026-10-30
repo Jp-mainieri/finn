@@ -34,6 +34,8 @@ export interface VoiceSession {
   close(): Promise<void>;
   /** Optional check if the assistant is actively speaking (e.g. for native SpeechSynthesis or audio player). */
   isSpeaking?(): boolean;
+  /** Speaks with the phone's own TTS, never touching the network (429/503 lines). */
+  speakLocal?(text: string): void;
   /** Optional manual trigger to immediately finish and send the current user utterance. */
   commitSpeech?(): void;
 }
@@ -42,5 +44,21 @@ export class UnauthorizedError extends Error {
   constructor() {
     super("Unauthorized");
     this.name = "UnauthorizedError";
+  }
+}
+
+/** 429 from a realtime route. */
+export class RateLimitedError extends Error {
+  constructor() {
+    super("Rate limited");
+    this.name = "RateLimitedError";
+  }
+}
+
+/** 503 from a realtime route. */
+export class UnavailableError extends Error {
+  constructor() {
+    super("Unavailable");
+    this.name = "UnavailableError";
   }
 }

@@ -8,13 +8,17 @@ import {
   SPEAKING_RMS_THRESHOLD,
 } from "./config";
 import { DelegationHandler } from "./delegation-handler";
-import { getDriverContext, getDriverSettings, saveDictatedAddress } from "./driver-settings";
+import { getDriverSettings } from "./driver-settings";
+import { LOCAL_SPEECH } from "./failure-speech";
+import { redeemInvite, type InviteResult } from "./invite-client";
+import { purgeLegacyDriverSettings, scrubSpotifyTokenFromUrl } from "./legacy-cleanup";
+import { disconnect as disconnectSpotify, fetchConnection, startConnect, type SpotifyState } from "./spotify-connection";
 import { OrchestratorClient, randomId } from "./orchestrator-client";
 import { isRecoverable, VoiceStateMachine, type VoiceError, type VoiceSnapshot } from "./state-machine";
 import { SttTtsVoiceSession } from "./stt-tts-session";
 import type { TokenStore } from "./token-store";
 import { TranscriptBuffer } from "./transcript-buffer";
-import { UnauthorizedError, type VoiceSession } from "./voice-session";
+import { RateLimitedError, UnauthorizedError, UnavailableError, type VoiceSession } from "./voice-session";
 import { createWakeWordDetector, type WakeWordDetector, type WakeWordStatus } from "./wake-word";
 
 /** Everything the UI renders. */
@@ -24,9 +28,13 @@ export interface VoiceView {
   userText: string;
   assistantText: string;
   pendingActions: PendingAction[];
+  /** Show the invite screen (no token yet, token rejected, or the driver asked for another invite). */
   needsToken: boolean;
   /** The server answered 401 with the saved token. */
   tokenRejected: boolean;
+  /** The invite screen was opened on purpose while a session is still saved, so it can be dismissed. */
+  canCancelInvite: boolean;
+  spotify: SpotifyState;
 }
 
 const TICK_MS = 200;
@@ -58,24 +66,36 @@ export class VoiceController {
   private autoOpen: { action: PendingAction; since: number; spokeAfter: boolean } | null = null;
   private openAfterClose: PendingAction | null = null;
   private disposed = false;
+  private settingsOpen = false;
+  /** Bumped whenever the signed-in driver changes (sign out, new invite, rejected session). */
+  private epoch = 0;
+  /** Latest Spotify request wins; older answers are dropped. */
+  private spotifySeq = 0;
+  private spotifyAbort: AbortController | null = null;
 
   constructor(private readonly tokens: TokenStore) {
+    // Old builds kept the Spotify refresh token and typed addresses here; remove them (once per load).
+    if (typeof window !== "undefined") {
+      try {
+        purgeLegacyDriverSettings(window.localStorage);
+      } catch {
+        // storage blocked
+      }
+      // A callback of the old flow left the refresh token in the address bar: strip it, unread.
+      if (window.location && window.history) scrubSpotifyTokenFromUrl(window.location, window.history);
+    }
     this.orchestrator = new OrchestratorClient({
       getToken: () => tokens.get(),
-      getDriverContext: () => getDriverContext() ?? {},
     });
     this.delegations = new DelegationHandler({
       transcripts: this.transcripts,
       orchestrator: this.orchestrator,
       speak: (id, text) => this.session?.speak(id, text),
+      speakLocal: (text) => this.session?.speakLocal?.(text),
+      sessionEpoch: () => this.epoch,
       onWorkStarted: () => this.machine.dispatch({ type: "WORK_STARTED" }),
       onWorkFinished: () => this.machine.dispatch({ type: "WORK_FINISHED" }),
       onTurn: ({ response }) => {
-        for (const action of response.clientActions) {
-          if (action.type === "save_address") {
-            saveDictatedAddress(action.label, action.address);
-          }
-        }
         this.onActions(toPendingActions(response.clientActions, randomId));
       },
       onFailure: (failure) => {
@@ -90,6 +110,8 @@ export class VoiceController {
       pendingActions: [],
       needsToken: !tokens.get(),
       tokenRejected: false,
+      canCancelInvite: false,
+      spotify: { status: "unknown" },
     };
     this.machine.subscribe((next, prev) => this.onTransition(next, prev));
   }
@@ -110,9 +132,27 @@ export class VoiceController {
 
   // --- Commands from the UI ---------------------------------------------------
 
-  saveToken(token: string): void {
-    this.tokens.set(token);
-    this.update({ needsToken: !this.tokens.get(), tokenRejected: false });
+  /** Redeems an invite code; on success the new session token replaces any previous one. */
+  async redeemInvite(code: string): Promise<InviteResult> {
+    const result = await redeemInvite(code, { tokens: this.tokens });
+    if (result.ok) this.afterTokenSaved();
+    return result;
+  }
+
+  /** "Entrar com outro convite": reopens the invite screen; the saved token stays until a new one is redeemed. */
+  openInvite(): void {
+    this.endTrip();
+    this.leaveDriver();
+    this.update({ needsToken: true, tokenRejected: false, canCancelInvite: Boolean(this.tokens.get()) });
+  }
+
+  cancelInvite(): void {
+    if (this.tokens.get()) this.update({ needsToken: false, tokenRejected: false, canCancelInvite: false });
+  }
+
+  private afterTokenSaved(): void {
+    this.leaveDriver();
+    this.update({ needsToken: !this.tokens.get(), tokenRejected: false, canCancelInvite: false });
     // The mic is still open after a 401 mid-trip: go straight back to listening.
     const { state, error } = this.machine.current;
     if (state === "error" && error?.kind === "unauthorized" && this.audio?.micAlive) {
@@ -120,10 +160,70 @@ export class VoiceController {
     }
   }
 
-  resetToken(): void {
+  /** "Sair deste aparelho": erases the local session token. */
+  signOut(): void {
     this.tokens.clear();
     this.endTrip();
-    this.update({ needsToken: true, tokenRejected: false });
+    this.leaveDriver();
+    this.update({ needsToken: true, tokenRejected: false, canCancelInvite: false });
+  }
+
+  /**
+   * The previous driver is gone (or changing): cancel any Spotify navigation or request in flight,
+   * drop late answers (epoch) and clear everything on screen that belonged to them.
+   */
+  private leaveDriver(): void {
+    this.epoch += 1;
+    this.spotifySeq += 1;
+    this.spotifyAbort?.abort();
+    this.spotifyAbort = null;
+    this.update({ userText: "", assistantText: "", pendingActions: [], spotify: { status: "unknown" } });
+  }
+
+  /** Starts one Spotify request; the answer is applied only if it is still the latest and the driver is the same. */
+  private async spotifyRequest(run: (opts: { signal: AbortSignal }, epoch: number) => Promise<SpotifyState>): Promise<void> {
+    this.spotifyAbort?.abort();
+    const abort = new AbortController();
+    this.spotifyAbort = abort;
+    const seq = ++this.spotifySeq;
+    const epoch = this.epoch;
+    this.update({ spotify: { status: "loading" } });
+    const next = await run({ signal: abort.signal }, epoch);
+    if (seq !== this.spotifySeq || epoch !== this.epoch) return;
+    if (next.status === "unauthorized") {
+      this.requireToken();
+      return;
+    }
+    this.update({ spotify: next });
+  }
+
+  // --- Spotify connection (the refresh token never reaches the phone) ----------------
+
+  /** Settings opened/closed: the connection state is re-read on open and whenever the app returns while open. */
+  setSettingsOpen(open: boolean): void {
+    this.settingsOpen = open;
+    if (open) void this.refreshSpotify();
+  }
+
+  async refreshSpotify(): Promise<void> {
+    await this.spotifyRequest((opts) => fetchConnection(this.tokens.get(), opts));
+  }
+
+  async connectSpotify(): Promise<void> {
+    await this.spotifyRequest((opts, epoch) =>
+      startConnect(
+        this.tokens.get(),
+        (url) => {
+          // Never navigate for a driver who has left, or after a newer request replaced this one.
+          if (epoch === this.epoch && !opts.signal.aborted) window.location.assign(url);
+        },
+        opts,
+      ),
+    );
+  }
+
+  async disconnectSpotify(): Promise<void> {
+    await this.spotifyRequest((opts) => disconnectSpotify(this.tokens.get(), opts));
   }
 
   /** Must be called from a tap: unlocks audio (iOS) and asks for the mic once. */
@@ -200,6 +300,8 @@ export class VoiceController {
 
   /** Page came back to the foreground (e.g. after Waze). */
   async onVisible(): Promise<void> {
+    // Back from the Spotify consent page (or any other app): re-read the connection.
+    if (this.settingsOpen && this.tokens.get()) void this.refreshSpotify();
     if (!this.audio) return;
     await this.audio.resume();
     void this.requestWakeLock();
@@ -303,7 +405,7 @@ export class VoiceController {
         console.warn("[voice] session error:", message);
         if (message === "Unauthorized") {
           this.requireToken();
-          this.fail({ kind: "unauthorized", message: "Token inválido. Configure de novo." });
+          this.fail({ kind: "unauthorized", message: "Sessão recusada. Entre com um convite de novo." });
         }
       },
     };
@@ -331,7 +433,12 @@ export class VoiceController {
       this.session = null;
       if (err instanceof UnauthorizedError) {
         this.requireToken();
-        this.fail({ kind: "unauthorized", message: "Token inválido. Configure de novo." });
+        this.fail({ kind: "unauthorized", message: "Sessão recusada. Entre com um convite de novo." });
+      } else if (err instanceof RateLimitedError || err instanceof UnavailableError) {
+        this.fail({
+          kind: "connect-failed",
+          message: err instanceof RateLimitedError ? LOCAL_SPEECH.rate_limited : LOCAL_SPEECH.unavailable,
+        });
       } else {
         console.warn("[voice] could not start the Live session", err);
         this.fail({ kind: "connect-failed", message: "Não consegui conectar. Toque para tentar de novo." });
@@ -348,7 +455,10 @@ export class VoiceController {
         session.speak(null, result.response.speech);
       } else if (result.failure === "unauthorized") {
         this.requireToken();
-        this.fail({ kind: "unauthorized", message: "Token inválido. Configure de novo." });
+        this.fail({ kind: "unauthorized", message: "Sessão recusada. Entre com um convite de novo." });
+      } else if (result.failure === "rate_limited" || result.failure === "unavailable") {
+        if (session.speakLocal) session.speakLocal(LOCAL_SPEECH[result.failure]);
+        else session.speak(null, LOCAL_SPEECH[result.failure]);
       } else {
         session.speak(null, "Bom dia! Não consegui falar com o servidor agora.");
       }
@@ -381,8 +491,11 @@ export class VoiceController {
     this.machine.dispatch({ type: "FAILED", error });
   }
 
+  /** The server refused this session (401): forget the token and go back to the invite screen. */
   private requireToken(): void {
-    this.update({ needsToken: true, tokenRejected: true });
+    this.tokens.clear();
+    this.leaveDriver();
+    this.update({ needsToken: true, tokenRejected: true, canCancelInvite: false });
   }
 
   // --- Wake word ----------------------------------------------------------------

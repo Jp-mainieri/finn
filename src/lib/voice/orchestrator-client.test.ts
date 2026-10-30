@@ -125,23 +125,16 @@ describe("OrchestratorClient", () => {
     }
   });
 
-  it("includes driverContext when configured and non-empty", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () => json(navigating));
-    const client = new OrchestratorClient({
-      getToken: () => "t",
-      fetchImpl,
-      getDriverContext: () => ({
-        spotifyRefreshToken: "sp-tok",
-        savedAddresses: { casa: "Rua A, 1" },
-      }),
-    });
-
+  it("never sends a driverContext, a refresh token or addresses (the server keeps them)", async () => {
+    const { client, bodyOf } = setup([json(navigating)]);
     await client.send("me leva pra casa");
-    const [, init] = fetchImpl.mock.calls[0];
-    const body = JSON.parse(init?.body as string);
-    expect(body.driverContext).toEqual({
-      spotifyRefreshToken: "sp-tok",
-      savedAddresses: { casa: "Rua A, 1" },
-    });
+    expect(Object.keys(bodyOf(0)).sort()).toEqual(["contextId", "transcript"]);
+  });
+
+  it("tells 429 and 503 apart from other server errors", async () => {
+    const { client } = setup([json({}, 429), json({}, 503), json({}, 502)]);
+    expect(await client.send("a")).toEqual({ ok: false, failure: "rate_limited", status: 429 });
+    expect(await client.send("b")).toEqual({ ok: false, failure: "unavailable", status: 503 });
+    expect(await client.send("c")).toEqual({ ok: false, failure: "server", status: 502 });
   });
 });

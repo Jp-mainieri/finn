@@ -6,24 +6,31 @@ import {
   saveDriverSettings,
   type DriverSettings,
 } from "@/lib/voice/driver-settings";
+import { SPOTIFY_MESSAGES } from "@/lib/voice/spotify-connection";
+import type { VoiceController, VoiceView } from "@/lib/voice/voice-controller";
 
-function DriverSettingsDialog({ onClose }: { onClose: () => void }) {
+function DriverSettingsDialog({
+  onClose,
+  controller,
+  view,
+}: {
+  onClose: () => void;
+  controller: VoiceController;
+  view: VoiceView;
+}) {
   const [settings] = useState<DriverSettings>(() => getDriverSettings());
-  const [casa, setCasa] = useState(settings.casa ?? "");
-  const [trabalho, setTrabalho] = useState(settings.trabalho ?? "");
-  const [spotifyToken, setSpotifyToken] = useState(settings.spotifyRefreshToken ?? "");
   const [ttsMode, setTtsMode] = useState<"native" | "openai">(settings.ttsMode);
   const [savedNotice, setSavedNotice] = useState(false);
+  const spotify = view.spotify;
+
+  useEffect(() => {
+    controller.setSettingsOpen(true);
+    return () => controller.setSettingsOpen(false);
+  }, [controller]);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    saveDriverSettings({
-      casa: casa.trim() || undefined,
-      trabalho: trabalho.trim() || undefined,
-      spotifyRefreshToken: spotifyToken.trim() || undefined,
-      ttsMode,
-      voiceProvider: "stt-tts",
-    });
+    saveDriverSettings({ ttsMode, voiceProvider: "stt-tts" });
     setSavedNotice(true);
     setTimeout(() => {
       setSavedNotice(false);
@@ -132,86 +139,77 @@ function DriverSettingsDialog({ onClose }: { onClose: () => void }) {
             </div>
           </section>
 
-          {/* Endereços Salvos (Waze) */}
+          {/* Spotify (o token fica no servidor; o aparelho só sabe se está conectado) */}
           <section className="space-y-3">
-            <div>
-              <h3 className="text-base font-semibold text-foreground">Endereços Salvos (Waze)</h3>
-              <p className="text-sm text-muted">
-                Diga &quot;leva pra casa&quot; ou &quot;pro trabalho&quot;. Endereços falados durante a viagem também são salvos aqui.
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-semibold text-foreground">Spotify</h3>
+              {spotify.status === "connected" && (
+                <span className="rounded-full bg-accent/20 px-3 py-1 text-sm font-semibold text-accent">Conectado</span>
+              )}
+              {spotify.status === "owner" && (
+                <span className="rounded-full bg-accent/20 px-3 py-1 text-sm font-semibold text-accent">
+                  Spotify do servidor
+                </span>
+              )}
+              {spotify.status === "disconnected" && (
+                <span className="rounded-full bg-border px-3 py-1 text-sm font-semibold text-muted">Não conectado</span>
+              )}
+              {spotify.status === "loading" && <span className="text-sm text-muted">Verificando…</span>}
+            </div>
+            {spotify.status === "error" && (
+              <p role="alert" className="rounded-2xl bg-danger/15 p-3 text-base text-danger">
+                {spotify.message}
               </p>
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="input-casa" className="block text-sm font-medium text-muted">
-                Casa
-              </label>
-              <input
-                id="input-casa"
-                type="text"
-                value={casa}
-                onChange={(e) => setCasa(e.target.value)}
-                placeholder="Ex: Rua Augusta, 123, São Paulo"
-                className="w-full rounded-2xl border border-border bg-background px-4 py-3 text-base text-foreground outline-none focus:border-accent"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="input-trabalho" className="block text-sm font-medium text-muted">
-                Trabalho
-              </label>
-              <input
-                id="input-trabalho"
-                type="text"
-                value={trabalho}
-                onChange={(e) => setTrabalho(e.target.value)}
-                placeholder="Ex: Av. Paulista, 1000, São Paulo"
-                className="w-full rounded-2xl border border-border bg-background px-4 py-3 text-base text-foreground outline-none focus:border-accent"
-              />
+            )}
+            {spotify.status === "owner" && <p className="text-sm text-muted">{SPOTIFY_MESSAGES.notApplicable}</p>}
+            <div className="flex flex-col gap-2">
+              {(spotify.status === "disconnected" || spotify.status === "error") && (
+                <button
+                  type="button"
+                  onClick={() => void controller.connectSpotify()}
+                  className="min-h-14 w-full rounded-2xl bg-accent px-4 text-lg font-semibold text-background transition active:scale-98"
+                >
+                  Conectar Spotify
+                </button>
+              )}
+              {spotify.status === "connected" && (
+                <button
+                  type="button"
+                  onClick={() => void controller.disconnectSpotify()}
+                  className="min-h-14 w-full rounded-2xl border-2 border-border bg-surface px-4 text-lg font-semibold text-foreground transition active:scale-98"
+                >
+                  Desconectar
+                </button>
+              )}
             </div>
           </section>
 
-          {/* Spotify */}
+          {/* Conta */}
           <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-foreground">Spotify do Motorista</h3>
-              {spotifyToken.trim() ? (
-                <span className="rounded-full bg-accent/20 px-3 py-1 text-xs font-semibold text-accent">
-                  ✓ Conectado
-                </span>
-              ) : (
-                <span className="rounded-full bg-border px-3 py-1 text-xs font-semibold text-muted">
-                  Padrão do Servidor
-                </span>
-              )}
-            </div>
-            <p className="text-sm text-muted">
-              Você pode usar sua própria conta do Spotify no Finn conectando via login ou colando seu Refresh Token.
-            </p>
-
+            <h3 className="text-base font-semibold text-foreground">Conta</h3>
             <div className="flex flex-col gap-2">
-              <a
-                href="/api/spotify/login"
-                className="flex min-h-12 items-center justify-center rounded-2xl border border-border bg-surface px-4 text-center text-sm font-semibold text-foreground hover:bg-background transition"
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  controller.openInvite();
+                }}
+                className="min-h-14 w-full rounded-2xl border-2 border-border bg-surface px-4 text-lg font-semibold text-foreground transition active:scale-98"
               >
-                Conectar meu Spotify via Web
-              </a>
-
-              <input
-                type="password"
-                value={spotifyToken}
-                onChange={(e) => setSpotifyToken(e.target.value)}
-                placeholder="Ou cole seu Spotify Refresh Token"
-                className="w-full rounded-2xl border border-border bg-background px-4 py-3 text-sm text-foreground outline-none focus:border-accent"
-              />
-              {spotifyToken.trim() && (
-                <button
-                  type="button"
-                  onClick={() => setSpotifyToken("")}
-                  className="self-end text-xs text-danger hover:underline"
-                >
-                  Desconectar Spotify pessoal
-                </button>
-              )}
+                Entrar com outro convite
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm("Sair deste aparelho? Será preciso um convite para entrar de novo.")) {
+                    onClose();
+                    controller.signOut();
+                  }
+                }}
+                className="min-h-14 w-full rounded-2xl border-2 border-danger/60 bg-surface px-4 text-lg font-semibold text-danger transition active:scale-98"
+              >
+                Sair deste aparelho
+              </button>
             </div>
           </section>
 
@@ -232,27 +230,15 @@ function DriverSettingsDialog({ onClose }: { onClose: () => void }) {
 export function DriverSettingsModal({
   isOpen,
   onClose,
+  controller,
+  view,
 }: {
   isOpen: boolean;
   onClose: () => void;
+  controller: VoiceController;
+  view: VoiceView;
 }) {
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-    const token =
-      params.get("spotify_refresh_token") ||
-      params.get("spotify_token") ||
-      hash.get("spotify_refresh_token");
-
-    if (token) {
-      saveDriverSettings({ spotifyRefreshToken: token });
-      const cleanUrl = window.location.pathname;
-      window.history.replaceState({}, document.title, cleanUrl);
-    }
-  }, []);
-
   if (!isOpen) return null;
 
-  return <DriverSettingsDialog onClose={onClose} />;
+  return <DriverSettingsDialog onClose={onClose} controller={controller} view={view} />;
 }

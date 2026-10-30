@@ -100,11 +100,25 @@ describe("DelegationHandler", () => {
   });
 
   it("apologises by voice on server errors", async () => {
-    const { handler, transcripts, spoken, deps } = setup(Response.json({ error: "x" }, { status: 503 }));
+    const { handler, transcripts, spoken, deps } = setup(Response.json({ error: "x" }, { status: 500 }));
     transcripts.add({ delta: "toca rock", startMs: 0, endMs: 500 });
     await run(handler.handle({ id: "del_1", offsetMs: 1_000 }));
     expect(spoken).toEqual([["del_1", SPEECH.unavailable]]);
     expect(deps.onFailure).toHaveBeenCalledWith("server", "toca rock");
+  });
+
+  it.each([
+    [429, "rate_limited", "Muitas tentativas, tente de novo em instantes."],
+    [503, "unavailable", "O Finn está fora do ar agora, tente de novo daqui a pouco."],
+  ] as const)("a %i is spoken locally (phone TTS, no network) with the fixed line", async (status, failure, line) => {
+    const { transcripts, spoken, deps } = setup(Response.json({ error: "x" }, { status }));
+    const local: string[] = [];
+    const withLocal = new DelegationHandler({ ...deps, speakLocal: (t) => void local.push(t) });
+    transcripts.add({ delta: "toca rock", startMs: 0, endMs: 500 });
+    await run(withLocal.handle({ id: "del_1", offsetMs: 1_000 }));
+    expect(local).toEqual([line]);
+    expect(spoken).toEqual([]);
+    expect(deps.onFailure).toHaveBeenCalledWith(failure, "toca rock");
   });
 
   it("recovers via fallback when fragments arrived with startMs >= offsetMs (timestamp jitter)", async () => {

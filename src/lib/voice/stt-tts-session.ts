@@ -7,6 +7,7 @@ import {
   VAD_SILENCE_MS,
   VAD_SPEECH_THRESHOLD,
 } from "./config";
+import { LOCAL_SPEECH, serverFailureKind } from "./failure-speech";
 import type { VoiceSession, VoiceSessionHandlers } from "./voice-session";
 
 export interface SttTtsVoiceSessionOptions {
@@ -316,6 +317,14 @@ export class SttTtsVoiceSession implements VoiceSession {
         return;
       }
 
+      const serverFailure = serverFailureKind(res.status);
+      if (serverFailure) {
+        // 429/503: the server is the problem, so say it with the phone's own voice (no network).
+        this.speakLocal(LOCAL_SPEECH[serverFailure]);
+        this.options.handlers.onError(serverFailure === "rate_limited" ? "Rate limited" : "Unavailable");
+        return;
+      }
+
       if (!res.ok) {
         this.options.handlers.onUserTranscript({
           delta: `(Erro na transcrição: HTTP ${res.status})`,
@@ -399,6 +408,14 @@ export class SttTtsVoiceSession implements VoiceSession {
     }
 
     return eventId;
+  }
+
+  /** Caption + native speechSynthesis only; never calls /api/realtime/tts. */
+  speakLocal(text: string): void {
+    if (this.closed) return;
+    const now = this.sessionOffsetMs();
+    this.options.handlers.onAssistantTranscript({ delta: text, startMs: now, endMs: now + 100 });
+    this.playNativeTts(text);
   }
 
   private activeBufferSource: AudioBufferSourceNode | null = null;

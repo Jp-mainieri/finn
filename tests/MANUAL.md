@@ -18,8 +18,15 @@ Mark each item ✅ / ❌ / ⚠️ and add a note for anything that isn't ✅.
 
 - [ ] Safari → build URL → Share → **Add to Home Screen**. The icon and name "Finn" look right.
 - [ ] Opening from the icon runs standalone (no Safari address bar).
-- [ ] First launch asks for the **API token** once; a wrong token shows a clear error, not a blank screen or silence.
-- [ ] Kill the app (swipe up) and reopen: the token is still there (`localStorage`); no prompt again.
+- [ ] First launch shows the **invite screen** (field `FINN-XXXX-XXXX`), not a token field. Typing the code in lower case works.
+- [ ] A well-formed but unknown or used code shows only "Convite inválido." (the server also answers 401 for a malformed code, so that text is the server's answer for anything it does not recognise).
+- [ ] A malformed code (too short, wrong letters) shows "Confira o código." **on the phone, with no request** (Safari Web Inspector → Network stays quiet). Pasting with spaces, lower case or a long dash (–) is accepted as the same code.
+- [ ] Airplane mode while tapping **Entrar**: within about 10 s the screen shows "Servidor indisponível, tente de novo." (never stuck on "Entrando…").
+- [ ] Redeem a test invite: the app enters. Kill the app (swipe up) and reopen: still signed in (session token in `localStorage`); no prompt again.
+- [ ] Settings → **Entrar com outro convite**: redeeming a second invite replaces the session (check by who the Spotify state belongs to); "Cancelar" returns without changing anything.
+- [ ] Settings → **Sair deste aparelho** asks for confirmation, then shows the invite screen again; reopening the app still shows it. The previous driver's captions are gone.
+- [ ] Sign out and "outro convite" only clear the token **on this phone**; the session stays valid on the server for up to 90 days (owner decision). Lost or stolen phone: the owner runs `npm run driver:rotate`, and the old token then gets a 401 and the invite screen.
+- [ ] Rate limit (parked, test environment only): after repeated wrong codes the screen shows "Muitas tentativas, tente em N min." with a plausible N (rounded up).
 - [ ] First launch asks for **microphone permission** once, with context on why. Denying it shows a clear message and a way to retry.
 - [ ] After allowing, reopening does not ask again.
 
@@ -54,12 +61,34 @@ Speak naturally, as you would while driving. For each one, note **time from the 
 
 ### Saved addresses (casa / trabalho)
 
+- [ ] Settings has **no** address fields and **no** field to paste a Spotify token (both live on the server now).
 - [ ] With nothing saved: "me leva pra casa" → Finn asks for the full address and Waze does **not** open.
 - [ ] In the **same** session, answer only with the address ("Rua Augusta, cento e vinte e três"): Waze opens to it. Check the number was transcribed correctly.
 - [ ] Close the session and wait for it to end. Later, "Finn, me leva pra casa" goes straight to the saved address without asking.
 - [ ] "meu trabalho" / "escritório" behave the same for *trabalho*. A seeded `WAZE_SAVED_ADDRESSES` entry is used without asking.
 - [ ] Ask for the address, then say nothing until the session times out. Next session: "toca rock" is **not** treated as an address.
 - [ ] ⚠️ Known risk: saved addresses live in server memory. After a redeploy or cold start (test the next morning), is "casa" still remembered? Note the result.
+
+### Spotify connection (installed PWA, standalone, preview with Redis and `FINN_TOKEN_ENC_KEY`)
+
+Answers the open question that decides whether the OAuth callback gets tied to the browser (contract `pwa-convite-e-dono.md`, option b). Record each answer.
+
+- [ ] Settings → Spotify shows "Não conectado" for a guest driver. Tap **Conectar Spotify**: does the Spotify consent page open **inside** the app or **outside** (Safari)? ___
+- [ ] After consenting, does the app come back **by itself** or do you have to open it again? ___ Does the status change to "Conectado" when you return (re-read on return, no manual refresh)? ___
+- [ ] Does the flow complete at all, and **where** (in the app or in Safari)? Note it even if the cookie `finn_spotify_oauth_state` is irrelevant in production. ___
+- [ ] **bfcache / return:** if you return to Finn without the status changing ("Verificando…" stays), note it: it means neither `visibilitychange` nor `pageshow` fired on this iOS version. Also note whether the app reloads from scratch on return (then it just shows the right state).
+- [ ] While the Spotify page is loading, tap **Sair deste aparelho** (or "outro convite") from the app if you can get back: it must not leave you in a Spotify consent for the previous driver.
+- [ ] Play a song by voice with the connected account ("toca *\<playlist>*").
+- [ ] **Desconectar** returns to "Não conectado"; "toca ..." then asks to connect Spotify.
+- [ ] The owner session shows "Spotify do servidor"; tapping connect (if shown) says it does not apply, with no error.
+- [ ] With Redis or the key off (preview without them): a short, fixed message, no stack or JSON on screen.
+
+### Server-down and throttling lines (spoken by the phone, no network)
+
+- [ ] Force a 503 (preview without Redis, or a stopped backend) and give a command: you hear "O Finn está fora do ar agora, tente de novo daqui a pouco."
+- [ ] Force a 429 (exceed the rate limit in the test environment) and give a command: you hear "Muitas tentativas, tente de novo em instantes."
+- [ ] With the mic active on iOS, native speech can be muted by the system: note whether these lines are audible or only appear on screen.
+- [ ] A 401 mid-trip (revoke the driver) sends you back to the invite screen with a short on-screen notice.
 
 ## 4. Waze deep link on iOS
 

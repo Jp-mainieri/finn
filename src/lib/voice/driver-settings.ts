@@ -1,10 +1,10 @@
-import type { DriverContext } from "@/lib/contracts/a2a";
 import { DRIVER_SETTINGS_STORAGE_KEY } from "./config";
 
+/**
+ * Preferences kept on the phone. The Spotify refresh token and saved addresses are NOT
+ * here any more: the server keeps them per driver (see legacy-cleanup.ts for the old keys).
+ */
 export interface DriverSettings {
-  casa?: string;
-  trabalho?: string;
-  spotifyRefreshToken?: string;
   ttsMode: "native" | "openai";
   voiceProvider: "stt-tts" | "gpt-live";
 }
@@ -26,25 +26,8 @@ export function getDriverSettings(getStorage = defaultStorage): DriverSettings {
   try {
     const raw = getStorage()?.getItem(DRIVER_SETTINGS_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : memorySettings;
-
-    let spotifyToken = parsed.spotifyRefreshToken;
-    if (!spotifyToken && typeof window !== "undefined" && typeof window.location !== "undefined") {
-      const searchParams = new URLSearchParams(window.location.search);
-      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-      const paramToken =
-        searchParams.get("spotify_refresh_token") ||
-        searchParams.get("spotify_token") ||
-        hashParams.get("spotify_refresh_token");
-      if (paramToken) {
-        spotifyToken = paramToken;
-      }
-    }
-
     const settings: DriverSettings = {
-      casa: typeof parsed.casa === "string" ? parsed.casa : undefined,
-      trabalho: typeof parsed.trabalho === "string" ? parsed.trabalho : undefined,
-      spotifyRefreshToken: typeof spotifyToken === "string" ? spotifyToken : undefined,
-      ttsMode: parsed.ttsMode === "openai" ? "openai" : "native",
+      ttsMode: parsed?.ttsMode === "openai" ? "openai" : "native",
       voiceProvider: "stt-tts",
     };
     memorySettings = { ...settings };
@@ -67,15 +50,10 @@ export function saveDriverSettings(patch: Partial<DriverSettings>, getStorage = 
     if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
       window.dispatchEvent(new CustomEvent("finn:driverSettingsChanged", { detail: updated }));
     }
-  } catch (err) {
-    console.warn("[driver-settings] failed to save to storage", err);
+  } catch {
+    // memory-only for this visit (storage blocked); nothing sensitive to report
   }
   return updated;
-}
-
-export function saveDictatedAddress(label: "casa" | "trabalho", address: string, getStorage = defaultStorage): void {
-  if (!label || !address) return;
-  saveDriverSettings({ [label]: address.trim() }, getStorage);
 }
 
 export function clearDriverSettings(getStorage = defaultStorage): void {
@@ -85,20 +63,4 @@ export function clearDriverSettings(getStorage = defaultStorage): void {
   } catch {
     // ignore
   }
-}
-
-export function getDriverContext(getStorage = defaultStorage): DriverContext | undefined {
-  const settings = getDriverSettings(getStorage);
-  const savedAddresses: Partial<Record<"casa" | "trabalho", string>> = {};
-  if (settings.casa?.trim()) savedAddresses.casa = settings.casa.trim();
-  if (settings.trabalho?.trim()) savedAddresses.trabalho = settings.trabalho.trim();
-
-  const hasAddresses = Object.keys(savedAddresses).length > 0;
-  const hasSpotify = Boolean(settings.spotifyRefreshToken?.trim());
-
-  if (!hasAddresses && !hasSpotify) return undefined;
-  return {
-    ...(hasSpotify ? { spotifyRefreshToken: settings.spotifyRefreshToken?.trim() } : {}),
-    ...(hasAddresses ? { savedAddresses } : {}),
-  };
 }

@@ -7,7 +7,11 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 - MVP funcionando no carro (iPhone PWA, v0.5.8). Wake word Porcupine, STT Groq Whisper, Neuralake + fallback Groq, agentes Spotify e Waze.
 - `main` limpo e sincronizado. 379 testes passam (4 pulados live), typecheck e lint limpos (2026-10-26).
 - Sem CI. Lote completo roda localmente, uma vez por branch.
-- Persistência: nenhuma durável. Endereços ditados vivem na memória da função (somem no cold start).
+- Persistência: nenhuma durável em `main`. Endereços ditados vivem na memória da função (somem no cold start).
+- Upstash for Redis (`finn-upstash`, plano Free) provisionado pelo dono em 2026-10-26, ligado a Production, Preview e Development: **um banco só, mesma credencial**. Tentativa de separar (D1 opção b) foi revertida no mesmo dia, ver Decisões provisórias. Variáveis: `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `KV_REST_API_READ_ONLY_TOKEN`, `KV_URL`, `REDIS_URL`.
+- `FINN_SESSION_SECRET` e `FINN_INVITE_PEPPER` configurados na Vercel pelo orquestrador (autorização do dono, 2026-10-26): 6 valores distintos (um par por ambiente), gerados com `openssl rand -hex 32` e enviados por pipe sem exibição. Production e Preview são `Sensitive`; Development não pode ser (limite da Vercel) e fica legível por `vercel env pull` para quem tem acesso ao projeto.
+- Etapa 1, entrega 1 (núcleo `src/lib/driver/`): implementada e corrigida após qa e security-review, em `feat/driver-store-core` (local, sem PR ainda). Relatórios: [`relatorios/driver-store-core-2026-10-26.md`](./relatorios/driver-store-core-2026-10-26.md), [`revisoes/driver-store-core-security-review.md`](./revisoes/driver-store-core-security-review.md), [`relatorios/orquestrador-2026-10-26.md`](./relatorios/orquestrador-2026-10-26.md). Rodada 3 (pepper do convite e `rotateSessions`) concluída: 442 testes passam, typecheck e lint limpos. Falta: push e PR (aguarda OK do dono), depois entrega 2.
+- PRs: #1 adoção do padrão (aberto, sem merge). Entrega 1 empilha sobre #1 e sobre a branch do contrato.
 
 ## Decisões fechadas
 
@@ -17,10 +21,21 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 - 2026-10-26: ordem de evolução: (1) Redis + `DriverProfile` + identidade, (2) memória curta da viagem, (3) lugares dinâmicos e aliases, depois rate limit e observabilidade antes de abrir o beta, (4) Modo Rotina. Camada 4 do plano espera.
 - 2026-10-26: o beta será aberto a outras pessoas, mas só com acesso controlado pelo dono.
 
+- 2026-10-26: o dono autorizou o orquestrador a **gerenciar as variáveis de ambiente da Vercel até o fim do desenvolvimento** (criar, alterar, remover; nunca imprimir valores). Continua valendo: nada em produção além disso sem OK, sem merge, sem push na `main`.
+- 2026-10-26: B3 fechado (não fazer). Entrega 2 liberada.
+- 2026-10-26: após o security-review da entrega 1, o dono aprovou duas adições ao contrato: pepper HMAC (`FINN_INVITE_PEPPER`) no hash do convite e `rotateSessions` (incrementa `tokenVersion` sem banir o motorista). Motivo: baratas agora, caras depois de haver convites emitidos.
+- 2026-10-26: decisões técnicas do agente aceitas (provisórias, ajustáveis por parâmetro): rate limit do resgate 10 por 600 s por IP; IP ausente ou inválido cai num balde próprio de 3 por 600 s; teto de espera do Redis 2 s sem retry (o EVAL de resgate nunca é retentado); tempo em ms em `expiresAt`, em s em `iat`/`exp`.
+
 ## Decisões provisórias
 
+- **Redis único (D1, 2026-10-26):** o dono escolheu primeiro separar o banco de produção (opção b), mas o plano Free do Upstash permite **1 banco por conta** e um segundo exigiria Pay as You Go. O dono não quer gastar nada por enquanto, então ficou **um banco para os 3 ambientes**, separados só pelo prefixo `finn:<env>:`.
+  - Controles compensatórios já em vigor: `FINN_SESSION_SECRET` e `FINN_INVITE_PEPPER` distintos por ambiente (um token ou convite de preview não valida em produção); prefixo de chave por ambiente; `NODE_ENV=production` nunca usa o fake.
+  - Risco aceito: um bug ou vazamento da credencial em preview alcança as chaves de produção (security-review M2). Não usar convites reais em preview.
+  - Reabre se: houver orçamento para um segundo banco (Pay as You Go com teto de gasto via `vercel integration resource create-threshold`), ou antes de abrir o beta a usuários reais, o que vier primeiro.
+
 - **Identidade (opção B, 2026-10-26):** `driverId` opaco gerado pelo servidor; token de sessão assinado, emitido em troca de código de convite criado e revogável pelo dono. O Spotify ID é só atributo ligado ao perfil (índice `spotify:<id> → driverId`). Substitui o `FINN_API_TOKEN` compartilhado.
-  - Reabre se: for preciso login sem convite (migrar para OAuth Spotify, opção C, só troca a forma de emitir o token), ou o OAuth quebrar no iOS standalone PWA.
+  - Convites criados e revogados por script local rodado pelo dono (sem rota de admin). Contrato aprovado em 2026-10-26: [`contratos/identidade-e-perfil.md`](./contratos/identidade-e-perfil.md).
+  - Reabre se: for preciso convidar pelo celular com frequência (rota de admin), for preciso login sem convite (migrar para OAuth Spotify, opção C, só troca a forma de emitir o token), ou o OAuth quebrar no iOS standalone PWA.
 
 ## Casos cinzentos aceitos
 
@@ -36,6 +51,11 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 5. Dependência da Neuralake (429 frequente, mascarada pelo fallback Groq). Acompanhar taxa de fallback.
 6. `README.md` é o template do Create Next App. Branches `feat/*` já mergeadas podem ser apagadas.
 7. TODO `neuralake-memory`: a Neuralake não documenta memória por agente.
+8. **Lua nunca rodou em Redis real** e o formato REST dos testes veio do código do SDK `@upstash/redis@1.40.0`, não de uma resposta real. Verificar em preview, assim que houver rota para exercitar o fluxo (entrega 2).
+9. `@upstash/redis` fixado em 1.40.0 sem `npm audit` nem checagem de procedência. Fazer antes do beta.
+10. Rotas devem tratar `DriverStoreUnavailableError` como negação com erro falável e sem logar o erro (entrega 2).
+11. Limite global de resgate de convite não existe (só por IP); tokens de 90 dias sem vínculo de ambiente (B3, em fila).
+12. Singleton do `MemoryDriverStore` em dev com bundles separados do Next (hipótese do qa), e build do cliente se o PWA importar o barrel `src/lib/driver` (importa `node:crypto`): não importar do PWA.
 
 ## Pré-lançamento (antes de abrir a usuários reais)
 
@@ -49,9 +69,16 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 ## Pendências do dono
 
 - [ ] Provisionar Upstash Redis (Marketplace da Vercel, região `gru1`) e avisar quando as variáveis estiverem no projeto. O agente só precisa dos nomes.
-- [ ] Definir variáveis novas quando listadas (ex.: chave de assinatura de sessão, chave de criptografia do refresh token, convites iniciais). Valores são do dono.
-- [ ] OK de merge de cada PR.
+- [x] `FINN_SESSION_SECRET` e `FINN_INVITE_PEPPER`: feitos (ver Estado). Trocar o pepper invalida todos os convites emitidos.
+- [ ] Mais tarde: `FINN_TOKEN_ENC_KEY` (entrega 4) e `FINN_LEGACY_TOKEN_ENABLED=1` (transitório, entrega 2).
+- [ ] OK de merge de cada PR (ordem: #1, depois as entregas empilhadas).
+- [ ] Autorizar push e PR da entrega 1 (a branch ainda é só local).
 
-## Em aberto (do dono)
+## Em aberto (do dono), em ordem de importância
 
-Nenhuma decisão aberta no momento.
+Nenhuma decisão aberta no momento. (B3, vínculo de ambiente no token, fechada em 2026-10-26 como "não fazer".)
+
+<!-- histórico da fila antes do fechamento:
+
+1. **B3, vínculo de ambiente no payload do token** (muda o contrato). Prioridade baixa: os segredos de sessão já são distintos por ambiente, então um token de preview não valida em produção. Recomendação: não fazer.
+-->

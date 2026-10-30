@@ -324,10 +324,15 @@ describe("hashToRecord", () => {
 });
 
 describe("rate limit validation and keys", () => {
-  it.each([0, -1, 1.5, NaN, Infinity, 86_401])("windowSeconds %s throws (memory and upstash)", async (w) => {
+  it.each([0, -1, 1.5, NaN, Infinity, 90_001])("windowSeconds %s throws (memory and upstash)", async (w) => {
     fakeUpstash();
     await expect(new MemoryDriverStore(P, () => T0, PEPPER).incrementRateLimit("ratelimit:redeem:a", w)).rejects.toThrow();
     await expect(real().incrementRateLimit("ratelimit:redeem:a", w)).rejects.toThrow();
+  });
+  it("windowSeconds 90000 (25 h) is accepted, 90001 is refused (memory and upstash)", async () => {
+    fakeUpstash();
+    await expect(new MemoryDriverStore(P, () => T0, PEPPER).incrementRateLimit("ratelimit:redeem:a", 90_000)).resolves.toBe(1);
+    await expect(real().incrementRateLimit("ratelimit:redeem:a", 90_000)).resolves.toBeGreaterThanOrEqual(1);
   });
   it("only ratelimit: keys with restricted charset", async () => {
     fakeUpstash();

@@ -1,4 +1,5 @@
 import { authorizeDriver } from "@/lib/auth";
+import { enforceAiLimit } from "@/lib/ai-limits";
 import { MissingEnvError, optionalEnv, requireEnv } from "@/lib/env";
 import { buildLiveSessionConfig, DEFAULT_LIVE_VOICE, type LiveSessionResponse } from "@/lib/voice/live-session-config";
 
@@ -26,6 +27,9 @@ export async function POST(request: Request) {
       { status: 403 },
     );
   }
+
+  const limited = await enforceAiLimit("live", auth.driverId);
+  if (limited) return limited;
 
   let sdp: unknown;
   try {

@@ -7,7 +7,7 @@ import {
   VAD_SILENCE_MS,
   VAD_SPEECH_THRESHOLD,
 } from "./config";
-import { LOCAL_SPEECH, serverFailureKind } from "./failure-speech";
+import { LOCAL_SPEECH, classifyServerFailure } from "./failure-speech";
 import type { VoiceSession, VoiceSessionHandlers } from "./voice-session";
 
 export interface SttTtsVoiceSessionOptions {
@@ -317,11 +317,14 @@ export class SttTtsVoiceSession implements VoiceSession {
         return;
       }
 
-      const serverFailure = serverFailureKind(res.status);
+      const serverFailure = await classifyServerFailure(res);
+      // Reading the 429 body can take a moment: the session may have closed (sign out, hang up)
+      // or a newer request may have replaced this one. Then nothing is spoken and nothing reported.
+      if (this.closed || reqId !== this.transcribeReqSeq) return;
       if (serverFailure) {
         // 429/503: the server is the problem, so say it with the phone's own voice (no network).
         this.speakLocal(LOCAL_SPEECH[serverFailure]);
-        this.options.handlers.onError(serverFailure === "rate_limited" ? "Rate limited" : "Unavailable");
+        this.options.handlers.onError(serverFailure === "unavailable" ? "Unavailable" : "Rate limited");
         return;
       }
 

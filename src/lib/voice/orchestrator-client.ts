@@ -1,9 +1,9 @@
 import type { Continuation } from "@/lib/contracts/a2a";
 import type { OrchestratorRequest, OrchestratorResponse } from "@/lib/contracts/client-events";
 import { ORCHESTRATOR_PATH, ORCHESTRATOR_TIMEOUT_MS } from "./config";
-import { serverFailureKind } from "./failure-speech";
+import { classifyServerFailure } from "./failure-speech";
 
-export type OrchestratorFailure = "unauthorized" | "rate_limited" | "unavailable" | "network" | "server" | "timeout";
+export type OrchestratorFailure = "unauthorized" | "rate_limited" | "day_limited" | "unavailable" | "network" | "server" | "timeout";
 
 export type OrchestratorResult =
   | { ok: true; response: OrchestratorResponse }
@@ -81,7 +81,7 @@ export class OrchestratorClient {
     }
 
     if (res.status === 401) return { ok: false, failure: "unauthorized", status: 401 };
-    const kind = serverFailureKind(res.status);
+    const kind = await classifyServerFailure(res);
     if (kind) return { ok: false, failure: kind, status: res.status };
     if (!res.ok) return { ok: false, failure: "server", status: res.status };
 

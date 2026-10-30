@@ -1,12 +1,19 @@
 import { agents } from "@/agents/registry";
+import { enforceAiLimit } from "@/lib/ai-limits";
 import { authorizeDriver } from "@/lib/auth";
 import { boundedContinuation } from "@/lib/continuation";
 import type { OrchestratorRequest } from "@/lib/contracts/client-events";
 import { orchestrate } from "@/orchestrator/orchestrate";
 
+/** A spoken command is a sentence; the PWA's longest utterance (12 s) is a few hundred characters. */
+const MAX_TRANSCRIPT_CHARS = 2000;
+
 export async function POST(request: Request) {
   const auth = await authorizeDriver(request);
   if (auth instanceof Response) return auth;
+
+  const limited = await enforceAiLimit("orchestrator", auth.driverId);
+  if (limited) return limited;
 
   let body: Partial<OrchestratorRequest>;
   try {
@@ -22,6 +29,10 @@ export async function POST(request: Request) {
   const transcript = typeof body.transcript === "string" ? body.transcript.trim() : "";
   if (!transcript) {
     return Response.json({ error: "`transcript` is required" }, { status: 400 });
+  }
+  // 400 like the other field validations (tts `text`, session `sdp`); 413 is kept for the raw payload size.
+  if (transcript.length > MAX_TRANSCRIPT_CHARS) {
+    return Response.json({ error: `\`transcript\` must have at most ${MAX_TRANSCRIPT_CHARS} characters` }, { status: 400 });
   }
 
   // Only `transcript`, `contextId` and `continuation` are read. Anything else in the body (an old PWA's

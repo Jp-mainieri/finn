@@ -11,6 +11,7 @@ export const SPEECH = {
   unavailable: "Não consegui falar com o servidor agora. Tenta de novo daqui a pouco.",
   unauthorized: "Meu acesso ao servidor foi recusado. Quando estiver parado, entre com um convite de novo na tela.",
   rateLimited: LOCAL_SPEECH.rate_limited,
+  dayLimited: LOCAL_SPEECH.day_limited,
   outOfService: LOCAL_SPEECH.unavailable,
 } as const;
 
@@ -66,8 +67,9 @@ export class DelegationHandler {
     }
 
     console.warn("[voice] orchestrator failed", result.failure, result.status);
-    if (result.failure === "rate_limited" || result.failure === "unavailable") {
-      const text = result.failure === "rate_limited" ? SPEECH.rateLimited : SPEECH.outOfService;
+    if (result.failure === "rate_limited" || result.failure === "day_limited" || result.failure === "unavailable") {
+      const text =
+        result.failure === "rate_limited" ? SPEECH.rateLimited : result.failure === "day_limited" ? SPEECH.dayLimited : SPEECH.outOfService;
       if (this.deps.speakLocal) this.deps.speakLocal(text);
       else this.deps.speak(id, text);
     } else {

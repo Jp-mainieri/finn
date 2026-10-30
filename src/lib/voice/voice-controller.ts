@@ -18,7 +18,7 @@ import { isRecoverable, VoiceStateMachine, type VoiceError, type VoiceSnapshot }
 import { SttTtsVoiceSession } from "./stt-tts-session";
 import type { TokenStore } from "./token-store";
 import { TranscriptBuffer } from "./transcript-buffer";
-import { RateLimitedError, UnauthorizedError, UnavailableError, type VoiceSession } from "./voice-session";
+import { DayLimitedError, RateLimitedError, UnauthorizedError, UnavailableError, type VoiceSession } from "./voice-session";
 import { createWakeWordDetector, type WakeWordDetector, type WakeWordStatus } from "./wake-word";
 
 /** Everything the UI renders. */
@@ -434,10 +434,10 @@ export class VoiceController {
       if (err instanceof UnauthorizedError) {
         this.requireToken();
         this.fail({ kind: "unauthorized", message: "Sessão recusada. Entre com um convite de novo." });
-      } else if (err instanceof RateLimitedError || err instanceof UnavailableError) {
+      } else if (err instanceof RateLimitedError || err instanceof DayLimitedError || err instanceof UnavailableError) {
         this.fail({
           kind: "connect-failed",
-          message: err instanceof RateLimitedError ? LOCAL_SPEECH.rate_limited : LOCAL_SPEECH.unavailable,
+          message: err instanceof DayLimitedError ? LOCAL_SPEECH.day_limited : err instanceof RateLimitedError ? LOCAL_SPEECH.rate_limited : LOCAL_SPEECH.unavailable,
         });
       } else {
         console.warn("[voice] could not start the Live session", err);
@@ -456,7 +456,7 @@ export class VoiceController {
       } else if (result.failure === "unauthorized") {
         this.requireToken();
         this.fail({ kind: "unauthorized", message: "Sessão recusada. Entre com um convite de novo." });
-      } else if (result.failure === "rate_limited" || result.failure === "unavailable") {
+      } else if (result.failure === "rate_limited" || result.failure === "day_limited" || result.failure === "unavailable") {
         if (session.speakLocal) session.speakLocal(LOCAL_SPEECH[result.failure]);
         else session.speak(null, LOCAL_SPEECH[result.failure]);
       } else {

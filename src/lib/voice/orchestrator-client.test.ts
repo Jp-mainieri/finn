@@ -137,4 +137,16 @@ describe("OrchestratorClient", () => {
     expect(await client.send("b")).toEqual({ ok: false, failure: "unavailable", status: 503 });
     expect(await client.send("c")).toEqual({ ok: false, failure: "server", status: 502 });
   });
+
+  it("reports a 429 with scope 'day' as day_limited; any other scope or a broken body stays rate_limited", async () => {
+    const { client } = setup([
+      json({ error: "Too many requests", scope: "day" }, 429),
+      json({ error: "Too many requests", scope: "burst" }, 429),
+      json({ scope: "DAY" }, 429),
+      new Response("<html>", { status: 429 }),
+      new Response(null, { status: 429 }),
+    ]);
+    expect(await client.send("a")).toEqual({ ok: false, failure: "day_limited", status: 429 });
+    for (const t of ["b", "c", "d", "e"]) expect(await client.send(t)).toEqual({ ok: false, failure: "rate_limited", status: 429 });
+  });
 });

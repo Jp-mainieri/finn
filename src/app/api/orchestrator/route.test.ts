@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@/lib/auth", () => ({
   authorizeDriver: async () => ({ driverId: h.driverId }),
+  isOwner: () => false,
 }));
 vi.mock("@/agents/registry", () => {
   const make = (id: AgentId) => ({

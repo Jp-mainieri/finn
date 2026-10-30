@@ -62,3 +62,11 @@ export class UnavailableError extends Error {
     this.name = "UnavailableError";
   }
 }
+
+/** 429 with `scope: "day"` from a realtime route. */
+export class DayLimitedError extends Error {
+  constructor() {
+    super("Daily limit");
+    this.name = "DayLimitedError";
+  }
+}

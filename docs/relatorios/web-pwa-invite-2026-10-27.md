@@ -61,3 +61,27 @@ Mutacao manual (script fora do repo, arvore restaurada): 20 mutacoes em producao
 5. Desvios
 - Item 4 do coordenador ("token guardado que nao casa e descartado"): aplicado so ao que nao pode ser token valido (`v1.` fora do formato; ASCII nao imprimivel; >1024). O token legado (`FINN_API_TOKEN`, formato livre) continua valendo, pois o contrato manda manter o legado funcionando.
 - `tests/qa/web-pwa-invite.test.ts` (do coordenador, nao commitado) usa as assinaturas antigas (`fetchConnection(token, fetch)`, `normalizeInviteCode` retornando string) e as caracterizacoes "CHARACTERISATION" que agora sao falsas; ele quebra o typecheck e alguns testes. Nao toquei nem apaguei; rodei o lote com ele movido para fora e restaurado em seguida. Precisa ser removido ou atualizado por quem o mantem.
+
+## M3 no PWA (2026-10-28, branch `feat/ai-rate-limits`)
+
+1. O que mudou: `failure-speech.ts` ganhou `classifyServerFailure(res)` (503 = unavailable; 429 = `day_limited` só se o corpo tiver `scope === "day"` exato, senão `rate_limited`) e a fala fixa "Você atingiu o limite de uso de hoje. Volte amanhã.". O corpo só é lido no 429, com teto de 1 KB, prazo de 1,5 s e try/catch (nunca lança). Usado por `orchestrator-client` (nova falha `day_limited`), `stt-tts-session` (transcribe), `live-session`/`voice-controller` (`DayLimitedError`, saudação, conexão) e `delegation-handler`. Convite e Spotify não mudam. TTS 429 continua caindo na voz nativa lendo o texto da resposta (não há fala de falha ali). `serverFailureKind` (por status) foi removida. `Retry-After` não decide texto. Docs: ARCHITECTURE.md e tests/MANUAL.md (caso do 429 do dia).
+2. Testes: `npm test && npm run typecheck && npm run lint && npm run build`: 1244 passaram, 4 ignorados, 0 falharam; typecheck, lint e build limpos. Mutações em cópia fora do repo (scratchpad): `toLowerCase`, `trim`, `includes`, `startsWith`, remover o teto de tamanho, 503 virando day_limited, `String(scope)`: todas mortas.
+3. Não verificado: nada em iPhone; o corpo real do 429 do servidor não foi exercitado (formato lido do contrato); fala nativa com mic aberto no iOS.
+4. Decisões: nenhuma.
+5. Desvios: o prazo de 1,5 s para ler o corpo e o teto de 1 KB são escolhas minhas (o contrato só pede teto). 
+
+## Rodada de correções do M3 (2026-10-28)
+
+1. O que mudou
+- P09: `src/lib/voice/live-session.test.ts` (novo, WebRTC simulado só até a troca HTTP): 429 com `scope: "day"` = `DayLimitedError`; 429 com burst, sem scope, "DAY", objeto, corpo não-JSON ou sem corpo = `RateLimitedError`; 503 (com ou sem `scope: "day"`) = `UnavailableError`; 403/500/502 com `scope: "day"` = erro genérico; 401 = `UnauthorizedError`.
+- P10: `voice-controller.test.ts` roda o `openSession` real com `connect()` rejeitando: `DayLimitedError`, `RateLimitedError` e `UnavailableError` dão erro `connect-failed` recuperável, cada um com sua frase fixa; outro erro mantém a mensagem genérica.
+- Segurança (ponto 8): `stt-tts-session.ts` (1 linha de produção) confere `closed`/`reqId` depois de `classifyServerFailure`; sessão fechada (sair, trocar de convite, desligar) enquanto o corpo do 429 ainda lê não fala nem chama `onError`, nem no fim do corpo nem no prazo. A troca de motorista fecha a sessão (`endTrip`), então o `closed` cobre o `epoch`.
+- N8: o prazo de 1,5 s só vale para corpo lento ou que não termina; o servidor real responde na hora e a fala sai sem esperar (teste: 10 ms de relógio simulado bastam). A fala do 429 espera a leitura do corpo (precisa do `scope`); mantido o teto de 1 KB.
+
+2. Testes: `npm test && npm run typecheck && npm run lint && npm run build`: 1298 passaram, 4 ignorados, 0 falharam (era 1244); typecheck, lint e build limpos. Mutações em cópia fora do repo (scratchpad), 8 de 8 mortas: DayLimitedError tratado como RateLimited (live); 503 sem mapeamento (live); fala depois de fechar (sem as duas guardas); `onError` depois de fechar; `connect` sem a fala do dia; `connect` com o dia caindo no genérico; `scope` "day" em 503 virando falha do dia; "DAY" aceito.
+
+3. Não verificado: nada em iPhone; WebRTC real (só a troca HTTP foi simulada); o `GptLiveSession` segue sem uso pelo controller (que só instancia `SttTtsVoiceSession`), então o caminho `DayLimitedError` no `connect` é teórico hoje; fala nativa com mic aberto no iOS.
+
+4. Decisões: nenhuma.
+
+5. Desvios: o pedido dizia que a fala do dia "é dita" no `connect`. Hoje ela aparece como linha de status do erro (texto grande na tela), não falada, porque a sessão nunca chegou a existir para falar; falar exigiria TTS nativo fora da sessão (mais de ~30 linhas, e o caminho é teórico). Fica como está e registrado aqui.

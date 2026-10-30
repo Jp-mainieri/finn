@@ -11,6 +11,7 @@
  *   }));
  */
 import { afterEach, beforeEach, vi } from "vitest";
+import { resetAiLimitsForTests } from "@/lib/ai-limits";
 import { TEST_A2A_TOKEN, TEST_TOKEN } from "./http";
 import { llm } from "./llm";
 import { resetAddressBook, resetSpotifyTokenCache } from "./modules";
@@ -52,6 +53,7 @@ export function useHarness(opts: HarnessOptions = {}): Harness {
   const h = {} as Harness;
   beforeEach(async () => {
     stubBaseEnv(opts.env);
+    resetAiLimitsForTests(); // the per-instance burst window must not leak between tests
     llm.reset();
     resetTimeline();
     h.spotify = installFakeSpotify(SPOTIFY_CREDS);

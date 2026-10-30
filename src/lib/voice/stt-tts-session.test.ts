@@ -254,4 +254,123 @@ describe("SttTtsVoiceSession session lifecycle & VAD", () => {
     expect(fetchMock.mock.calls.map(([u]) => u)).not.toContain("/api/realtime/tts");
     vi.useRealTimers();
   });
+
+  it("a transcribe 429 with scope 'day' speaks the daily-limit line locally; 'DAY' stays generic", async () => {
+    for (const [scope, line] of [
+      ["day", "Você atingiu o limite de uso de hoje. Volte amanhã."],
+      ["DAY", "Muitas tentativas, tente de novo em instantes."],
+    ] as const) {
+      vi.useFakeTimers();
+      fetchMock.mockReset();
+      (handlers.onAssistantTranscript as ReturnType<typeof vi.fn>).mockClear();
+      fetchMock.mockResolvedValueOnce(Response.json({ error: "Too many requests", scope }, { status: 429 }));
+      const session = new SttTtsVoiceSession({
+        audio: mockAudio as unknown as AudioIO,
+        getToken: () => "s3cret",
+        getTtsMode: () => "openai",
+        handlers,
+        fetchImpl: fetchMock,
+      });
+      await session.connect();
+      for (let i = 0; i < 12; i++) {
+        vi.advanceTimersByTime(32);
+        session.processFrame(new Int16Array(512).fill(2000));
+      }
+      for (let i = 0; i < 30; i++) {
+        vi.advanceTimersByTime(32);
+        session.processFrame(new Int16Array(512));
+      }
+      await vi.runAllTimersAsync();
+      expect(handlers.onAssistantTranscript).toHaveBeenCalledWith(expect.objectContaining({ delta: line }));
+      expect(fetchMock.mock.calls.map(([u]) => u)).not.toContain("/api/realtime/tts");
+      vi.useRealTimers();
+    }
+  });
+
+  describe("local speech for a 429 whose body is still being read", () => {
+    /** Drives one utterance to the transcribe request without firing the body-read deadline. */
+    async function utterance(session: SttTtsVoiceSession) {
+      await session.connect();
+      for (let i = 0; i < 12; i++) {
+        vi.advanceTimersByTime(32);
+        session.processFrame(new Int16Array(512).fill(2000));
+      }
+      for (let i = 0; i < 30; i++) {
+        vi.advanceTimersByTime(32);
+        session.processFrame(new Int16Array(512));
+      }
+      await vi.advanceTimersByTimeAsync(10);
+    }
+    const slow429 = () => {
+      let body!: ReadableStreamDefaultController<Uint8Array>;
+      const stream = new ReadableStream<Uint8Array>({ start: (c) => void (body = c) });
+      return { response: new Response(stream, { status: 429 }), body };
+    };
+    const mk = () =>
+      new SttTtsVoiceSession({
+        audio: mockAudio as unknown as AudioIO,
+        getToken: () => "s3cret",
+        getTtsMode: () => "openai",
+        handlers,
+        fetchImpl: fetchMock,
+      });
+
+    afterEach(() => vi.useRealTimers());
+
+    it("a session closed while the body is still reading says nothing and reports nothing, then or at the deadline", async () => {
+      vi.useFakeTimers();
+      const { response, body } = slow429();
+      fetchMock.mockResolvedValueOnce(response);
+      const session = mk();
+      await utterance(session);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await session.close(); // sign out / hang up while the 429 body is in flight
+      (handlers.onAssistantTranscript as ReturnType<typeof vi.fn>).mockClear();
+      body.enqueue(new TextEncoder().encode(JSON.stringify({ scope: "day" })));
+      body.close();
+      await vi.advanceTimersByTimeAsync(3_000); // past the 1.5 s body deadline too
+
+      expect(handlers.onAssistantTranscript).not.toHaveBeenCalled();
+      expect(handlers.onError).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("the same when the deadline (not the body) ends the read", async () => {
+      vi.useFakeTimers();
+      const { response } = slow429(); // the body never ends
+      fetchMock.mockResolvedValueOnce(response);
+      const session = mk();
+      await utterance(session);
+      await session.close();
+      (handlers.onAssistantTranscript as ReturnType<typeof vi.fn>).mockClear();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(handlers.onAssistantTranscript).not.toHaveBeenCalled();
+      expect(handlers.onError).not.toHaveBeenCalled();
+    });
+
+    it("still speaks when the session stays open and the body arrives late", async () => {
+      vi.useFakeTimers();
+      const { response, body } = slow429();
+      fetchMock.mockResolvedValueOnce(response);
+      const session = mk();
+      await utterance(session);
+      body.enqueue(new TextEncoder().encode(JSON.stringify({ scope: "day" })));
+      body.close();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(handlers.onAssistantTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({ delta: "Você atingiu o limite de uso de hoje. Volte amanhã." }),
+      );
+    });
+
+    it("a server that answers normally is not delayed by the body deadline (no timer needs to fire)", async () => {
+      vi.useFakeTimers();
+      fetchMock.mockResolvedValueOnce(Response.json({ error: "Too many requests", scope: "burst" }, { status: 429 }));
+      const session = mk();
+      await utterance(session); // only 10 ms of fake time after the request, far below 1.5 s
+      expect(handlers.onAssistantTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({ delta: "Muitas tentativas, tente de novo em instantes." }),
+      );
+    });
+  });
 });

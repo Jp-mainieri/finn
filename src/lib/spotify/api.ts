@@ -25,7 +25,6 @@ export interface SpotifyRequest {
   signal?: AbortSignal;
   /** Server-proven driver (never from the client). */
   driverId: string;
-  refreshToken?: string;
 }
 
 function send(url: string, token: string, { method = "GET", body, signal }: SpotifyRequest) {
@@ -73,24 +72,24 @@ export async function spotifyRequest<T = unknown>(
   const url = pathOrUrl.startsWith("https://") ? pathOrUrl : `${SPOTIFY_API_BASE}${pathOrUrl}`;
   let res: Response;
   try {
-    res = await send(url, await getAccessToken({ driverId: req.driverId, signal: req.signal, refreshToken: req.refreshToken }), req);
+    res = await send(url, await getAccessToken({ driverId: req.driverId, signal: req.signal }), req);
     if (res.status === 401) {
       await res.body?.cancel().catch(() => {});
       res = await send(
         url,
-        await getAccessToken({ driverId: req.driverId, forceRefresh: true, signal: req.signal, refreshToken: req.refreshToken }),
+        await getAccessToken({ driverId: req.driverId, forceRefresh: true, signal: req.signal }),
         req,
       );
     }
   } catch (err) {
     if (err instanceof UserFacingError || req.signal?.aborted) throw err;
-    console.error(`[spotify] request to ${url} failed`, err);
-    throw new UserFacingError(UNREACHABLE_SPEECH, { cause: err });
+    console.error("[spotify] request failed"); // no SDK/network detail
+    throw new UserFacingError(UNREACHABLE_SPEECH);
   }
 
   if (!res.ok) {
     const err = await readError(res, url);
-    console.error(`[spotify] ${err.message}`);
+    console.error(`[spotify] API returned ${err.status}${err.reason ? ` (${err.reason})` : ""}`);
     throw new UserFacingError(speechFor(err), { cause: err });
   }
 

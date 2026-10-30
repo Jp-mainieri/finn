@@ -40,6 +40,8 @@ function fakeUpstash(opts: { indexWrongType?: boolean; failWith?: { status: numb
   const hashes = new Map<string, Record<string, string>>();
   const counters = new Map<string, number>();
   const sets = new Map<string, Set<string>>();
+  const kv = new Map<string, string>();
+  const ttls = new Map<string, number>();
   const commands: string[][] = [];
   const fetchMock = vi.fn(async (_url: unknown, init: RequestInit) => {
     const cmd = JSON.parse(init.body as string) as string[];
@@ -67,6 +69,27 @@ function fakeUpstash(opts: { indexWrongType?: boolean; failWith?: { status: numb
       }
       case "smembers":
         return reply([...(sets.get(rest[0]) ?? [])]);
+      case "set": {
+        kv.set(rest[0], rest[1]);
+        const ex = rest.findIndex((x) => x.toUpperCase() === "EX");
+        if (ex > 0) ttls.set(rest[0], Number(rest[ex + 1]));
+        return reply("OK");
+      }
+      case "get":
+        return reply(kv.get(rest[0]) ?? null);
+      case "getdel": {
+        const v = kv.get(rest[0]) ?? null;
+        kv.delete(rest[0]);
+        return reply(v);
+      }
+      case "del": {
+        let n = 0;
+        for (const k of rest) {
+          if (kv.delete(k)) n++;
+          if (hashes.delete(k)) n++;
+        }
+        return reply(n);
+      }
       case "hgetall": {
         const h = hashes.get(rest[0]);
         return reply(h ? Object.entries(h).flat() : []);
@@ -113,7 +136,7 @@ function fakeUpstash(opts: { indexWrongType?: boolean; failWith?: { status: numb
     return new Response(JSON.stringify({ error: "unsupported" }), { status: 400 });
   });
   vi.stubGlobal("fetch", fetchMock);
-  return { fetchMock, hashes, commands, sets };
+  return { fetchMock, hashes, commands, sets, kv, ttls };
 }
 
 const P = keyPrefix("preview");

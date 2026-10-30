@@ -4,18 +4,6 @@ import { boundedContinuation } from "@/lib/continuation";
 import type { OrchestratorRequest } from "@/lib/contracts/client-events";
 import { orchestrate } from "@/orchestrator/orchestrate";
 
-function getCookie(request: Request, name: string): string | undefined {
-  const header = request.headers.get("cookie");
-  if (!header) return undefined;
-  const match = header.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
-  if (!match) return undefined;
-  try {
-    return decodeURIComponent(match[1]);
-  } catch {
-    return undefined; // malformed %-escape: treated as absent
-  }
-}
-
 export async function POST(request: Request) {
   const auth = await authorizeDriver(request);
   if (auth instanceof Response) return auth;
@@ -36,22 +24,10 @@ export async function POST(request: Request) {
     return Response.json({ error: "`transcript` is required" }, { status: 400 });
   }
 
-  // Only the Spotify token of the device is taken from the client (theirs, until delivery 4).
-  // Any other driverContext field (savedAddresses, a stray driverId...) is dropped here.
-  const cookieToken =
-    getCookie(request, "finn_spotify_token") ?? getCookie(request, "finn_spotify_rt");
-  const rawRt = body.driverContext?.spotifyRefreshToken;
-  const bodyRt = typeof rawRt === "string" ? rawRt.trim() : undefined;
-  const validBodyRt = bodyRt && bodyRt !== "undefined" && bodyRt !== "null" ? bodyRt : undefined;
-  const spotifyRefreshToken = validBodyRt ?? cookieToken;
-  // Presence of a context (even empty) is what makes the waze agent keep emitting `save_address`
-  // for the current PWA; its content is never trusted beyond the Spotify token.
-  const driverContext =
-    (typeof body.driverContext === "object" && body.driverContext !== null) || cookieToken
-      ? spotifyRefreshToken
-        ? { spotifyRefreshToken }
-        : {}
-      : undefined;
+  // Nothing from the client's driverContext is trusted: not a Spotify token (the server reads the
+  // driver's own from its encrypted store, by driverId), not addresses, not an id. Cookies are not read.
+  // Only its PRESENCE counts: it is what makes the waze agent keep emitting `save_address` for the current PWA.
+  const driverContext = typeof body.driverContext === "object" && body.driverContext !== null ? {} : undefined;
 
   const response = await orchestrate(transcript, {
     agents,

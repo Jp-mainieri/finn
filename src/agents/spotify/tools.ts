@@ -6,9 +6,9 @@ import { findBestMatch } from "@/lib/spotify/fuzzy";
 import { controlPlayback, playContext, type PlaybackAction } from "@/lib/spotify/player";
 import { listPlaylists, playlistUri, type Playlist } from "@/lib/spotify/playlists";
 
-/** Identity for Spotify calls: driverId from the server only; the token is the driver's own (theirs until delivery 4). */
+/** Identity for Spotify calls: the driverId from the server only. The token is read server-side from it. */
 function whoIs(input: AgentTaskInput): SpotifyIdentity {
-  return { driverId: input.driverId, refreshToken: input.driverContext?.spotifyRefreshToken };
+  return { driverId: input.driverId };
 }
 
 const PLAYBACK_ACTIONS: readonly PlaybackAction[] = ["play", "pause", "skip"];
@@ -74,8 +74,8 @@ export const spotifyExecutors: Record<string, ToolExecutor> = {
               },
             };
           }
-        } catch (searchErr) {
-          console.warn("[spotify] fallback search failed:", searchErr);
+        } catch {
+          console.warn("[spotify] fallback search failed");
         }
       }
 

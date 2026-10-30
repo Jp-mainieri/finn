@@ -41,3 +41,8 @@ let cached: DriverStore | undefined;
 export function getDriverStore(): DriverStore {
   return (cached ??= createDriverStore());
 }
+
+/** Test hook: replaces (or, with undefined, clears) the process-wide store. */
+export function setDriverStoreForTests(store: DriverStore | undefined): void {
+  cached = store;
+}

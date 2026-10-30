@@ -18,7 +18,11 @@ export const AGENT_IDS: readonly AgentId[] = ["spotify", "waze"] as const;
 // ---------------------------------------------------------------------------
 
 export interface DriverContext {
-  /** Optional per-user Spotify refresh token (encrypted or raw from client setup), overriding SPOTIFY_REFRESH_TOKEN. */
+  /**
+   * @deprecated Never read by the server since delivery 4 (the refresh token lives encrypted in the
+   * server store, by driverId). Type kept ONLY so the PWA (src/lib/voice, removed in delivery 5) still
+   * type-checks; the route drops it. Do not use.
+   */
   spotifyRefreshToken?: string;
   /**
    * @deprecated Ignored by the server since delivery 3 (addresses live in the server store, per driver).

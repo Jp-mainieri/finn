@@ -265,6 +265,18 @@ function mockRedis() {
       calls.push({ op: "get", keys: [key] });
       return null;
     },
+    async set(key) {
+      calls.push({ op: "set", keys: [key] });
+      return "OK";
+    },
+    async del(...ks) {
+      calls.push({ op: "del", keys: ks });
+      return 0;
+    },
+    async getdel(key) {
+      calls.push({ op: "getdel", keys: [key] });
+      return null;
+    },
     async eval(script, ks, args) {
       calls.push({ op: script === REDEEM_SCRIPT ? "redeem" : script === REVOKE_SCRIPT ? "revoke" : "rl", keys: ks });
       if (script === REDEEM_SCRIPT) {

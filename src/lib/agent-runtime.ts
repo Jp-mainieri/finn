@@ -126,7 +126,6 @@ export async function runToolLoop(opts: ToolLoopOptions): Promise<AgentResult> {
           const isDuplicate = clientActions.some((a) => {
             if (a.type !== action.type) return false;
             if (a.type === "open_url" && action.type === "open_url") return a.url === action.url;
-            if (a.type === "save_address" && action.type === "save_address") return a.label === action.label;
             return false;
           });
           if (!isDuplicate) {

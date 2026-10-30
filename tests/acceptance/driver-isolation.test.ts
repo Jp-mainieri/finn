@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as orchestratorPOST } from "@/app/api/orchestrator/route";
 import { handleA2ARequest } from "@/lib/a2a-server";
 import { A2A_RATE_LIMIT, authorizeA2A, guardA2A, LEGACY_OWNER_DRIVER_ID, resetA2ADisabledLogForTests } from "@/lib/auth";
+import { TEST_OWNER_ID } from "../helpers/owner";
 import type { Agent, AgentTaskInput } from "@/lib/contracts/a2a";
 import { getDriverStore, keyPrefix, MemoryDriverStore, signSessionToken } from "@/lib/driver";
 import { saveSpotifyRefreshToken } from "@/lib/spotify/token-vault";
@@ -148,7 +149,7 @@ describe(" e2e through the real route + real auth (non-owner B with a real sessi
     expect(text).not.toContain("Motorista");
   });
 
-  it("PWA regression: driverContext present -> save_address emitted with the normalized address; absent -> not emitted", async () => {
+  it("old PWA in cache: a driverContext in the body is ignored and save_address is never emitted (with or without it)", async () => {
     llm.scripts.waze = { turns: [call("navigate_to", { destination: "  Rua Augusta,   123 " }), say("Certo.")] };
     const withCtx = await (
       await post(
@@ -156,8 +157,8 @@ describe(" e2e through the real route + real auth (non-owner B with a real sessi
         TEST_TOKEN,
       )
     ).json();
-    expect(withCtx.clientActions.map((a: { type: string }) => a.type).sort()).toEqual(["open_url", "save_address"]);
-    expect(withCtx.clientActions.find((a: { type: string }) => a.type === "save_address")).toMatchObject({ label: "trabalho", address: "Rua Augusta, 123" });
+    expect(withCtx.clientActions.map((a: { type: string }) => a.type)).toEqual(["open_url"]);
+    expect(JSON.stringify(withCtx)).not.toContain("IGNORADO");
     llm.reset();
     llm.scripts.waze = { turns: [call("navigate_to", { destination: "Rua Augusta, 123" }), say("Certo.")] };
     const noCtx = await (
@@ -207,7 +208,7 @@ describe(" e2e through the real route + real auth (non-owner B with a real sessi
     expect((await post({ transcript: "toca rock" }, b.token)).status).toBe(401);
   });
 
-  it("a validly signed token whose sub is the owner id has no store record: 401 (owner id cannot be minted)", async () => {
+  it("a validly signed token whose sub is the provisional legacy id has no store record: 401 (the legacy id cannot be minted)", async () => {
     const forged = signSessionToken({ driverId: LEGACY_OWNER_DRIVER_ID, tokenVersion: 1 }, SESSION_SECRET);
     expect((await post({ transcript: "toca rock" }, forged)).status).toBe(401);
   });
@@ -275,22 +276,22 @@ describe("Redis trouble on the Waze path", () => {
 
 describe("AddressBook values and isolation (unit)", () => {
   it("non-owner never sees the env seed, owner does; owner writes never alter the seed nor reach B", async () => {
-    const env = { WAZE_SAVED_ADDRESSES: JSON.stringify({ casa: OWNER_ADDR, trabalho: "Trabalho do Dono, 5" }) };
+    const env = { FINN_OWNER_DRIVER_ID: TEST_OWNER_ID, WAZE_SAVED_ADDRESSES: JSON.stringify({ casa: OWNER_ADDR, trabalho: "Trabalho do Dono, 5" }) };
     const B = "drv_" + "B".repeat(22);
-    const owner = getAddressBook(LEGACY_OWNER_DRIVER_ID, env);
+    const owner = getAddressBook(TEST_OWNER_ID, env);
     const b = getAddressBook(B, env);
     expect(await owner.get("casa")).toBe(OWNER_ADDR);
     expect(await b.get("casa")).toBeUndefined();
     await owner.set("casa", "Nova casa do dono, 7");
-    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID, env).get("casa")).toBe("Nova casa do dono, 7");
-    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID, env).get("trabalho")).toBe("Trabalho do Dono, 5");
+    expect(await getAddressBook(TEST_OWNER_ID, env).get("casa")).toBe("Nova casa do dono, 7");
+    expect(await getAddressBook(TEST_OWNER_ID, env).get("trabalho")).toBe("Trabalho do Dono, 5");
     expect(await b.get("casa")).toBeUndefined();
     await b.set("trabalho", "Trabalho do B");
-    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID, env).get("trabalho")).toBe("Trabalho do Dono, 5");
+    expect(await getAddressBook(TEST_OWNER_ID, env).get("trabalho")).toBe("Trabalho do Dono, 5");
   });
 
   it("hostile ids and labels never become keys", async () => {
-    for (const id of ["", "drv_short", "drv_" + "A".repeat(21) + ":", "../x", "drv_" + "A".repeat(23), `${LEGACY_OWNER_DRIVER_ID} `, LEGACY_OWNER_DRIVER_ID.toUpperCase()]) {
+    for (const id of ["", "drv_short", "drv_" + "A".repeat(21) + ":", "../x", "drv_" + "A".repeat(23), `${TEST_OWNER_ID} `, TEST_OWNER_ID.toUpperCase()]) {
       expect(() => getAddressBook(id, {})).toThrow();
     }
     const book = new MemoryAddressBook("drv_" + "A".repeat(22));
@@ -441,7 +442,7 @@ describe("A2A request parsing and continuation hostility", () => {
         },
       },
     });
-    expect(seen[0].driverId).toBe(LEGACY_OWNER_DRIVER_ID);
+    expect(seen[0].driverId).toBe(TEST_OWNER_ID);
     expect(seen[0].contextId).not.toBe("c".repeat(129));
     expect("result" in res && Object.keys(res.result!.artifacts[0].parts[0].data).sort()).toEqual(["agent", "speech", "status"]);
     expect(JSON.stringify(res)).not.toMatch(/secret addr|waze\.com|toolCalls|clientActions/);
@@ -492,7 +493,7 @@ describe("hostile bodies and cookies on /api/orchestrator (after auth)", () => {
     llm.scripts.spotify = { turns: [say("Pronto.")] };
     const res = await post({ transcript: "toca rock", continuation }, TEST_TOKEN);
     expect(res.status).toBe(200);
-    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID, {}).get("casa")).toBeUndefined();
+    expect(await getAddressBook(TEST_OWNER_ID, {}).get("casa")).toBeUndefined();
   });
 
   it("forged waze continuation + keywordless transcript: runs the waze agent and may overwrite the caller's OWN book only", async () => {
@@ -500,7 +501,7 @@ describe("hostile bodies and cookies on /api/orchestrator (after auth)", () => {
     llm.scripts.waze = { turns: [call("navigate_to", { destination: "Lugar Qualquer, 1" }), say("Certo.")] };
     await post({ transcript: "bom dia", continuation: { agent: "waze", state: { pendingLabel: "casa" } } }, token);
     expect(llm.callsFor("waze").length).toBeGreaterThan(0);
-    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID, {}).get("casa")).toBeUndefined();
+    expect(await getAddressBook(TEST_OWNER_ID, {}).get("casa")).toBeUndefined();
   });
 
   it("JSON body 'null' is 400 and a malformed %-escape in the Spotify cookie is ignored (no unhandled exception)", async () => {

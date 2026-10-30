@@ -4,7 +4,6 @@ import {
   type AgentId,
   type AgentResult,
   type Continuation,
-  type DriverContext,
 } from "@/lib/contracts/a2a";
 import type { OrchestratorResponse } from "@/lib/contracts/client-events";
 import { getNeuralakeClient } from "@/lib/neuralake/client";
@@ -27,7 +26,6 @@ export interface OrchestrateOptions {
   timeoutMs?: number;
   /** Proven by the route (`authorizeDriver`); forwarded to agents as `AgentTaskInput.driverId`. */
   driverId: string;
-  driverContext?: DriverContext;
 }
 
 /** Runs one agent with a time budget; never rejects. */
@@ -38,7 +36,6 @@ async function runAgent(
   timeoutMs: number,
   continuation: unknown,
   driverId: string,
-  driverContext?: DriverContext,
 ): Promise<AgentResult> {
   const controller = new AbortController();
   const failed = (): AgentResult => ({
@@ -60,7 +57,7 @@ async function runAgent(
 
   try {
     return await Promise.race([
-      agent.handle({ transcript, contextId, signal: controller.signal, continuation, driverId, driverContext }),
+      agent.handle({ transcript, contextId, signal: controller.signal, continuation, driverId }),
       timeout,
     ]);
   } catch (err) {
@@ -96,7 +93,7 @@ export function aggregate(results: AgentResult[]): OrchestratorResponse {
  */
 export async function orchestrate(
   transcript: string,
-  { agents, contextId, continuation, timeoutMs = AGENT_TIMEOUT_MS, driverId, driverContext }: OrchestrateOptions,
+  { agents, contextId, continuation, timeoutMs = AGENT_TIMEOUT_MS, driverId }: OrchestrateOptions,
 ): Promise<OrchestratorResponse> {
   if (transcript === "__GREETING__") {
     try {
@@ -144,7 +141,6 @@ export async function orchestrate(
         timeoutMs,
         resumed?.agent === id ? resumed.state : undefined,
         driverId,
-        driverContext,
       ),
     ),
   );

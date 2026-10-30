@@ -24,10 +24,8 @@ export async function POST(request: Request) {
     return Response.json({ error: "`transcript` is required" }, { status: 400 });
   }
 
-  // Nothing from the client's driverContext is trusted: not a Spotify token (the server reads the
-  // driver's own from its encrypted store, by driverId), not addresses, not an id. Cookies are not read.
-  // Only its PRESENCE counts: it is what makes the waze agent keep emitting `save_address` for the current PWA.
-  const driverContext = typeof body.driverContext === "object" && body.driverContext !== null ? {} : undefined;
+  // Only `transcript`, `contextId` and `continuation` are read. Anything else in the body (an old PWA's
+  // `driverContext`, an id, a token) is ignored without error. Cookies are not read.
 
   const response = await orchestrate(transcript, {
     agents,
@@ -35,7 +33,6 @@ export async function POST(request: Request) {
     // Untrusted and unsigned: at most 2 KB, then parsed strictly by the agent. Never carries identity.
     continuation: boundedContinuation(body.continuation),
     driverId: auth.driverId,
-    driverContext,
   });
   return Response.json(response);
 }

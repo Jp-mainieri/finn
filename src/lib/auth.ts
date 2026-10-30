@@ -5,6 +5,7 @@ import {
   getDriverStore,
   getSessionSecret,
   isAcceptableSecret,
+  isValidDriverId,
   normalizeIpForRateLimit,
   type DriverStore,
 } from "@/lib/driver";
@@ -20,7 +21,7 @@ let a2aDisabledLogged = false;
 function a2aDisabled(): Response {
   if (!a2aDisabledLogged) {
     a2aDisabledLogged = true;
-    console.error("[a2a] disabled: FINN_A2A_TOKEN missing or invalid");
+    console.error("[a2a] disabled: FINN_A2A_TOKEN missing or invalid, or no owner");
   }
   return Response.json({ error: "A2A endpoint disabled" }, { status: 503 });
 }
@@ -74,7 +75,7 @@ function a2aBearerMatches(request: Request, secrets: string[]): boolean {
  */
 export function authorizeA2A(request: Request): Response | null {
   const secrets = a2aSecrets();
-  if (!secrets) return a2aDisabled();
+  if (!secrets || !getOwnerDriverId()) return a2aDisabled();
   return a2aBearerMatches(request, secrets) ? null : UNAUTHORIZED();
 }
 
@@ -102,7 +103,7 @@ export async function guardA2A(
   deps: { store?: DriverStore; limit?: { max: number; windowSeconds: number }; limitNoIp?: { max: number; windowSeconds: number } } = {},
 ): Promise<Response | null> {
   const secrets = a2aSecrets();
-  if (!secrets) return a2aDisabled();
+  if (!secrets || !getOwnerDriverId()) return a2aDisabled();
 
   const bearer = extractBearer(request);
   if (!bearer || !HEX64_RE.test(bearer)) return UNAUTHORIZED();
@@ -119,7 +120,16 @@ export async function guardA2A(
     return unavailableResponse();
   }
 
-  if (a2aBearerMatches(request, secrets)) return null;
+  if (a2aBearerMatches(request, secrets)) {
+    // Right secret: the owner behind it must be live (revoked, missing or store failure = off). The limiter is untouched.
+    const owner = getOwnerDriverId();
+    try {
+      if (!owner || !(await ownerCredentialsLive(owner, store))) return a2aDisabled();
+    } catch {
+      return a2aDisabled();
+    }
+    return null;
+  }
   try {
     await store.incrementRateLimit(key, limit.windowSeconds);
   } catch {
@@ -129,11 +139,59 @@ export async function guardA2A(
 }
 
 /**
- * driverId of the owner for the legacy shared token (FINN_API_TOKEN) while
- * FINN_LEGACY_TOKEN_ENABLED=1. Format: `drv_` + 22 base64url chars (same as isValidDriverId).
- * Fixed, not a real store entry: it has no record in the DriverStore.
+ * Provisional owner id, used ONLY while FINN_LEGACY_TOKEN_ENABLED=1 and FINN_OWNER_DRIVER_ID is absent or invalid.
+ * Format: `drv_` + 22 base64url chars (same as isValidDriverId). Fixed, not a real store entry.
+ * Never "the owner" by itself: ask `getOwnerDriverId()` / `isOwner()`.
  */
 export const LEGACY_OWNER_DRIVER_ID = "drv_legacy_owner_000000000";
+
+type OwnerEnv = Record<string, string | undefined>;
+
+let ownerInvalidLogged = false;
+
+/** Test hook: re-arms the once-per-process log line of an invalid FINN_OWNER_DRIVER_ID. */
+export function resetOwnerLogForTests(): void {
+  ownerInvalidLogged = false;
+}
+
+/**
+ * driverId of the OWNER: the only identity that uses SPOTIFY_REFRESH_TOKEN and WAZE_SAVED_ADDRESSES.
+ * - A valid FINN_OWNER_DRIVER_ID (exact value, no trim, `drv_` + 22 base64url); or
+ * - only while FINN_LEGACY_TOKEN_ENABLED === "1", the provisional LEGACY_OWNER_DRIVER_ID;
+ * - otherwise undefined: nobody is the owner (fail closed). An invalid value counts as absent, with one
+ *   fixed log line per process (no value). Read from the environment on every call (nothing is cached).
+ */
+export function getOwnerDriverId(env: OwnerEnv = process.env): string | undefined {
+  // Only the ends are trimmed (a newline or space from how the variable was created); the id is then compared EXACTLY.
+  const configured = env.FINN_OWNER_DRIVER_ID?.trim();
+  if (configured !== undefined && configured !== "") {
+    // The legacy id is never a valid value here: it is an owner only through the flag, never through the variable.
+    if (isValidDriverId(configured) && configured !== LEGACY_OWNER_DRIVER_ID) return configured;
+    if (!ownerInvalidLogged) {
+      ownerInvalidLogged = true;
+      console.error("[auth] FINN_OWNER_DRIVER_ID is invalid; ignored");
+    }
+  }
+  return env.FINN_LEGACY_TOKEN_ENABLED === "1" ? LEGACY_OWNER_DRIVER_ID : undefined;
+}
+
+/**
+ * When the owner is a REAL id (not the provisional legacy one), the legacy token and A2A, which are the owner's
+ * credentials, only work while that driver exists and is active. Revoked, missing or store failure: not ok.
+ * The legacy id has no record, so nothing is checked for it. `driver:rotate` does not touch this (it rotates sessions).
+ */
+async function ownerCredentialsLive(owner: string, store?: DriverStore): Promise<boolean> {
+  if (owner === LEGACY_OWNER_DRIVER_ID) return true;
+  const driver = await (store ?? getDriverStore()).getDriver(owner); // throws when the store is unavailable
+  return driver !== null && driver.status === "active";
+}
+
+/** True only for the exact owner id (no trim, no case folding). Without an owner, always false. */
+export function isOwner(driverId: unknown, env: OwnerEnv = process.env): boolean {
+  if (typeof driverId !== "string") return false;
+  const owner = getOwnerDriverId(env);
+  return owner !== undefined && driverId === owner;
+}
 
 const UNAUTHORIZED = () =>
   Response.json({ error: "Unauthorized" }, { status: 401, headers: { "WWW-Authenticate": "Bearer" } });
@@ -172,7 +230,15 @@ export async function authorizeDriver(
   if (!token) return UNAUTHORIZED();
 
   if (!token.startsWith("v1.")) {
-    return legacyMatches(token) ? { driverId: LEGACY_OWNER_DRIVER_ID } : UNAUTHORIZED();
+    // The legacy token is the owner's credential: it maps to the owner id in effect, never to another id.
+    if (!legacyMatches(token)) return UNAUTHORIZED();
+    const owner = getOwnerDriverId();
+    if (!owner) return UNAUTHORIZED();
+    try {
+      return (await ownerCredentialsLive(owner, deps.store)) ? { driverId: owner } : UNAUTHORIZED();
+    } catch {
+      return unavailableResponse(); // store down: closed
+    }
   }
 
   try {

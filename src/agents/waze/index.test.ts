@@ -1,5 +1,6 @@
+import type { AgentTaskInput } from "@/lib/contracts/a2a";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { TEST_OWNER_ID } from "../../../tests/helpers/owner";
 import type { Agent, AgentResult } from "@/lib/contracts/a2a";
 import type { NeuralakeClient } from "@/lib/contracts/neuralake";
 import { WAZE_TOOLS } from "@/lib/contracts/tools";
@@ -34,7 +35,7 @@ function useModel(script: MockScript): MockNeuralakeClient {
 }
 
 const handle = (transcript: string, continuation?: unknown) =>
-  wazeAgent.handle({ transcript, contextId: "ctx", continuation, driverId: LEGACY_OWNER_DRIVER_ID });
+  wazeAgent.handle({ transcript, contextId: "ctx", continuation, driverId: TEST_OWNER_ID });
 
 beforeEach(() => {
   vi.stubEnv("WAZE_SAVED_ADDRESSES", "");
@@ -107,7 +108,7 @@ describe("wazeAgent", () => {
       ],
     });
     expect(second.continuation).toBeUndefined();
-    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID).get("casa")).toBe("Rua Augusta, 123");
+    expect(await getAddressBook(TEST_OWNER_ID).get("casa")).toBe("Rua Augusta, 123");
 
     // Turn 3: next time, the saved address is used without asking.
     useModel(navigateScript("minha casa"));
@@ -159,7 +160,7 @@ describe("wazeAgent", () => {
     const res = await handle("me leva pro Shopping Iguatemi", hostile);
     expect(client.calls[0].messages[0].content).not.toContain("Contexto deste turno");
     expect(res.toolCalls[0].result).toEqual({ navigating_to: "Shopping Iguatemi" });
-    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID).get("casa")).toBeUndefined();
+    expect(await getAddressBook(TEST_OWNER_ID).get("casa")).toBeUndefined();
   });
 
   it("speaks a fallback when the model ends the turn without text", async () => {
@@ -204,7 +205,7 @@ describe("wazeAgent through the orchestrator", () => {
 
   it("round-trips the home-address continuation, even alongside music (UC7)", async () => {
     useModel(navigateScript("casa"));
-    const first = await orchestrate("toca minha playlist e me leva pra casa", { agents, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
+    const first = await orchestrate("toca minha playlist e me leva pra casa", { agents, contextId: "ctx", driverId: TEST_OWNER_ID });
     expect(first.speech).toBe("Tocando sua playlist. Qual é o endereço da sua casa?");
     expect(first.clientActions).toEqual([]);
     expect(first.continuation).toEqual({ agent: "waze", state: { pendingLabel: "casa" } });
@@ -213,7 +214,7 @@ describe("wazeAgent through the orchestrator", () => {
     const second = await orchestrate("Rua Augusta, 123", {
       agents,
       contextId: "ctx",
-      driverId: LEGACY_OWNER_DRIVER_ID,
+      driverId: TEST_OWNER_ID,
       continuation: first.continuation,
     });
     expect(second.results.map((r) => r.agent)).toEqual(["waze"]);
@@ -234,9 +235,9 @@ describe("wazeAgent through the orchestrator", () => {
     const res = await wazeAgent.handle({
       transcript: "me leva pra casa",
       contextId: "ctx",
-      driverId: LEGACY_OWNER_DRIVER_ID,
+      driverId: TEST_OWNER_ID,
       driverContext: { savedAddresses: { casa: "Custom Driver Casa" } },
-    });
+    } as AgentTaskInput);
     expect(res.status).toBe("completed");
     expect(res.clientActions).toEqual([
       {
@@ -257,7 +258,7 @@ describe("wazeAgent through the orchestrator", () => {
 
     useModel(navigateScript("Rua do Outro, 9"));
     await wazeAgent.handle({ transcript: "Rua do Outro, 9", contextId: "ctx", driverId: OTHER, continuation: asked.continuation });
-    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID).get("casa")).toBe("Casa do Dono");
+    expect(await getAddressBook(TEST_OWNER_ID).get("casa")).toBe("Casa do Dono");
   });
 
   describe("Redis down", () => {
@@ -277,7 +278,7 @@ describe("wazeAgent through the orchestrator", () => {
       const err = vi.spyOn(console, "error").mockImplementation(() => {});
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       useModel(navigateScript("casa"));
-      for (const driverId of [LEGACY_OWNER_DRIVER_ID, "drv_" + "B".repeat(22)]) {
+      for (const driverId of [TEST_OWNER_ID, "drv_" + "B".repeat(22)]) {
         const res = await wazeAgent.handle({ transcript: "me leva pra casa", contextId: "ctx", driverId });
         expect(res).toMatchObject({ status: "failed", speech: "Não consegui acessar seus endereços agora.", clientActions: [] });
         expect(JSON.stringify(res)).not.toMatch(/Casa do Dono|secret-detail/);
@@ -329,21 +330,21 @@ describe("wazeAgent through the orchestrator", () => {
       vi.stubEnv("KV_REST_API_TOKEN", "");
       const err = vi.spyOn(console, "error").mockImplementation(() => {});
       useModel(navigateScript("casa"));
-      const res = await wazeAgent.handle({ transcript: "me leva pra casa", contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
+      const res = await wazeAgent.handle({ transcript: "me leva pra casa", contextId: "ctx", driverId: TEST_OWNER_ID });
       expect(res).toMatchObject({ status: "failed", speech: "Não consegui acessar seus endereços agora." });
       expect(err).not.toHaveBeenCalled();
     });
   });
 
-  it("emits save_address clientAction when driverContext is provided", async () => {
+  it("never emits save_address, even when an old client's driverContext is smuggled in", async () => {
     useModel(navigateScript("Rua Oscar Freire, 100"));
     const res = await wazeAgent.handle({
       transcript: "Rua Oscar Freire, 100",
       contextId: "ctx",
       continuation: { pendingLabel: "casa" },
-      driverId: LEGACY_OWNER_DRIVER_ID,
+      driverId: TEST_OWNER_ID,
       driverContext: {},
-    });
+    } as AgentTaskInput);
     expect(res.status).toBe("completed");
     expect(res.clientActions).toEqual([
       {
@@ -351,12 +352,8 @@ describe("wazeAgent through the orchestrator", () => {
         url: "https://waze.com/ul?q=Rua%20Oscar%20Freire%2C%20100&navigate=yes",
         label: "Navegar para casa",
       },
-      {
-        type: "save_address",
-        label: "casa",
-        address: "Rua Oscar Freire, 100",
-      },
     ]);
+    expect(JSON.stringify(res)).not.toContain("save_address");
   });
 
   it("exposes keywords and failureSpeech", () => {

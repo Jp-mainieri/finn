@@ -17,6 +17,10 @@ export const AGENT_IDS: readonly AgentId[] = ["spotify", "waze"] as const;
 // In-process contract (what each agent implements)
 // ---------------------------------------------------------------------------
 
+/**
+ * @deprecated Removed in 5b. The server ignores it completely (the orchestrator does not read it and
+ * `AgentTaskInput` has no such field). Kept only so src/lib/voice and src/components still type-check.
+ */
 export interface DriverContext {
   /**
    * @deprecated Never read by the server since delivery 4 (the refresh token lives encrypted in the
@@ -36,7 +40,7 @@ export interface AgentTaskInput {
   transcript: string;
   /**
    * Driver that owns every resource this turn touches. Set ONLY by the server from
-   * `authorizeDriver` (or the fixed owner identity of A2A); never from a body, `driverContext`,
+   * `authorizeDriver` (or the owner identity of A2A, `getOwnerDriverId()`); never from a body,
    * `continuation` or cookie. Agents never read an id from anywhere else.
    */
   driverId: string;
@@ -50,8 +54,6 @@ export interface AgentTaskInput {
    * for the full address of "casa" and this turn carries the answer).
    */
   continuation?: unknown;
-  /** Optional per-driver context for multi-user support. */
-  driverContext?: DriverContext;
 }
 
 /** Pending follow-up owned by one agent, round-tripped through the PWA. */

@@ -6,12 +6,12 @@
  * - Storage: Redis hash `finn:<env>:driver-addr:<driverId>` = { casa, trabalho }. Same prefix rule,
  *   same fail-closed rule and same generic `DriverStoreUnavailableError` as the driver store:
  *   outside development/test, missing Redis variables throw; they never fall back to memory.
- * - The owner (LEGACY_OWNER_DRIVER_ID) reads Redis first and, when empty, the read-only seed from
+ * - The owner (getOwnerDriverId) reads Redis first and, when empty, the read-only seed from
  *   WAZE_SAVED_ADDRESSES. The seed is never written back.
  * - Addresses are personal data kept as plain text under the driver's own key (accepted risk).
  * Never log an address or an SDK error from here.
  */
-import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { isOwner as isOwnerDriver } from "@/lib/auth";
 import { hashToRecord, resolveDriverBackend } from "@/lib/driver";
 import { DriverStoreUnavailableError, assertPrefix, isValidDriverId, keys } from "@/lib/driver/store";
 import { isSavedLabel, type SavedLabel } from "./labels";
@@ -168,7 +168,7 @@ type Env = Record<string, string | undefined>;
  * owner, and when production has no Redis variables. Callers treat any throw as "store unavailable".
  */
 export function getAddressBook(driverId: string, env: Env = process.env): AddressBook {
-  const isOwner = driverId === LEGACY_OWNER_DRIVER_ID;
+  const isOwner = isOwnerDriver(driverId, env);
   if (!isOwner && !isValidDriverId(driverId)) throw new Error("Invalid driverId");
   const { prefix, redis } = resolveDriverBackend(env);
   const base: AddressBook = redis

@@ -1,12 +1,12 @@
-import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { TEST_OWNER_ID } from "../../../tests/helpers/owner";
 import { describe, expect, it } from "vitest";
 import { MemoryAddressBook } from "@/lib/waze/address-book";
 import { DriverStoreUnavailableError } from "@/lib/driver/store";
 import type { AddressBook } from "@/lib/waze/address-book";
 import { ADDRESS_STORE_UNAVAILABLE_SPEECH, createNavigateTo, parseContinuation } from "./tools";
 
-const newBook = () => new MemoryAddressBook(LEGACY_OWNER_DRIVER_ID);
-const input = { transcript: "", contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID };
+const newBook = () => new MemoryAddressBook(TEST_OWNER_ID);
+const input = { transcript: "", contextId: "ctx", driverId: TEST_OWNER_ID };
 
 describe("parseContinuation", () => {
   it("accepts only known shapes", () => {

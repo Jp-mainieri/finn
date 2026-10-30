@@ -86,7 +86,7 @@ export const wazeAgent: Agent = {
   handle: async (input) => {
     // Closed list: anything that is not exactly a known shape is ignored (the client can send anything).
     const continuation = parseContinuation(input.continuation);
-    // The book belongs to input.driverId (server-proven). driverContext.savedAddresses is ignored.
+    // The book belongs to input.driverId (server-proven).
     // It is resolved lazily, only when a label (casa/trabalho) or a pending answer needs it, so an explicit
     // destination works even when Redis is down or unconfigured. A resolution failure is the same generic
     // store error as a Redis failure (short spoken failure, never another book, nothing logged).

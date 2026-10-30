@@ -52,7 +52,7 @@ describe("POST /api/orchestrator driver identity", () => {
     expect(h.seen.length).toBeGreaterThan(0);
     for (const input of h.seen) {
       expect(input.driverId).toBe(h.driverId);
-      expect(input.driverContext).toEqual({}); // the token inside is dropped
+      expect("driverContext" in input).toBe(false); // nothing of it is read
       expect(JSON.stringify(input)).not.toContain("mine");
     }
   });
@@ -63,7 +63,7 @@ describe("POST /api/orchestrator driver identity", () => {
       { cookie: "driverId=drv_legacy_owner_000000000; finn_spotify_rt=cookie-rt" },
     );
     expect(h.seen[0].driverId).toBe(h.driverId);
-    expect(h.seen[0].driverContext).toEqual({});
+    expect("driverContext" in h.seen[0]).toBe(false);
     expect(JSON.stringify(h.seen[0])).not.toContain("Rua X");
   });
 
@@ -89,9 +89,9 @@ describe("POST /api/orchestrator driver identity", () => {
     h.driverId = "drv_" + "B".repeat(22);
   });
 
-  it("without a driverContext in the request none is made up", async () => {
+  it("without a driverContext in the request none is made up (nor with one: the field does not exist for agents)", async () => {
     await post({ transcript: "toca rock" }, { cookie: "finn_spotify_rt=cookie-rt" });
-    expect(h.seen[0].driverContext).toBeUndefined();
+    expect("driverContext" in h.seen[0]).toBe(false);
   });
 
   it("a continuation over 2 KB is ignored; one within the limit is passed on (the agent parses it strictly)", async () => {
@@ -117,6 +117,6 @@ describe("POST /api/orchestrator driver identity", () => {
   it("a malformed %-escape in a cookie is never read, so never an exception", async () => {
     const res = await post({ transcript: "toca rock" }, { cookie: "finn_spotify_rt=%E0%A4%A; finn_spotify_token=bad%zz" });
     expect(res.status).toBe(200);
-    expect(h.seen[0].driverContext).toBeUndefined();
+    expect("driverContext" in h.seen[0]).toBe(false);
   });
 });

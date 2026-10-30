@@ -1,10 +1,10 @@
-import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { TEST_OWNER_ID } from "../../tests/helpers/owner";
 import { describe, expect, it } from "vitest";
 import { MockNeuralakeClient, textMessage, toolCallMessage } from "@/lib/neuralake/mock";
 import { runToolLoop, UserFacingError } from "./agent-runtime";
 import { SPOTIFY_TOOLS } from "./contracts/tools";
 
-const input = { transcript: "toca rock", contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID };
+const input = { transcript: "toca rock", contextId: "ctx", driverId: TEST_OWNER_ID };
 
 describe("runToolLoop", () => {
   it("executes tool calls and returns the model's final text", async () => {

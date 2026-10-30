@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { useHarness } from "../helpers/harness";
 import { callA2A, callOrchestrator, getCard, messageSend, TEST_A2A_TOKEN, TEST_TOKEN } from "../helpers/http";
 import { llm } from "../helpers/llm";
+import "../helpers/owner";
 
 vi.mock("@/lib/neuralake/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/neuralake/client")>()),

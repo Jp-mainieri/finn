@@ -1,4 +1,4 @@
-import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+import { getOwnerDriverId } from "@/lib/auth";
 import { boundedContinuation } from "@/lib/continuation";
 import type {
   A2AMessage,
@@ -40,6 +40,9 @@ function rpcError(id: A2AResponse["id"], code: number, message: string): A2AResp
 
 /** JSON-RPC `message/send` handler wrapping an in-process Agent. */
 export async function handleA2ARequest(agent: Agent, request: Request): Promise<A2AResponse> {
+  // A2A runs as the owner. Without one nothing runs (the route answers 503 first; this is the second lock).
+  const ownerDriverId = getOwnerDriverId();
+  if (!ownerDriverId) return rpcError(null, -32000, "A2A endpoint disabled");
   let body: A2ASendRequest;
   try {
     body = await request.json();
@@ -73,9 +76,9 @@ export async function handleA2ARequest(agent: Agent, request: Request): Promise<
     typeof message?.contextId === "string" && message.contextId.length > 0 && message.contextId.length <= 128
       ? message.contextId
       : crypto.randomUUID();
-  // FINN_A2A_TOKEN is the OWNER's credential: A2A always runs as the owner, explicitly. The id is
-  // fixed here and never read from the body.
-  const result = await agent.handle({ transcript, contextId, continuation, driverId: LEGACY_OWNER_DRIVER_ID });
+  // FINN_A2A_TOKEN is the OWNER's credential: A2A always runs as the owner, explicitly. The id comes
+  // from the server configuration and is never read from the body.
+  const result = await agent.handle({ transcript, contextId, continuation, driverId: ownerDriverId });
 
   const reply: A2AMessage = {
     kind: "message",

@@ -5,7 +5,7 @@
  * "not connected". Nothing here logs.
  */
 import { getDriverStore, isValidDriverId, keyPrefix, keys, type DriverStore } from "../driver";
-import { LEGACY_OWNER_DRIVER_ID } from "../auth";
+import { isOwner } from "../auth";
 import { decryptToken, encryptToken, getTokenEncKey } from "./token-crypto";
 
 type Env = Record<string, string | undefined>;
@@ -46,9 +46,9 @@ function keyOrThrow(env: Env): Buffer {
 export async function saveSpotifyRefreshToken(driverId: string, refreshToken: string, deps: VaultDeps = {}): Promise<void> {
   const env = deps.env ?? process.env;
   if (!isValidDriverId(driverId) || typeof refreshToken !== "string" || !refreshToken) throw new Error("Invalid token input");
-  // The owner uses SPOTIFY_REFRESH_TOKEN of the server: a blob under the legacy id would be ignored and misleading
+  // The owner uses SPOTIFY_REFRESH_TOKEN of the server: a blob under the owner id would be ignored and misleading
   // (this also covers states issued before the owner was refused at /connect).
-  if (driverId === LEGACY_OWNER_DRIVER_ID) throw new Error("The owner has no stored token");
+  if (isOwner(driverId, env)) throw new Error("The owner has no stored token");
   const key = keyOrThrow(env);
   const blob = encryptToken(refreshToken, key, tokenAad(driverId, env));
   await (deps.store ?? getDriverStore()).setSpotifyBlob(driverId, blob);
@@ -70,7 +70,7 @@ export async function loadSpotifyRefreshToken(driverId: string, deps: VaultDeps 
  */
 export async function saveRotatedSpotifyRefreshToken(driverId: string, refreshToken: string, deps: VaultDeps = {}): Promise<boolean> {
   const env = deps.env ?? process.env;
-  if (!isValidDriverId(driverId) || driverId === LEGACY_OWNER_DRIVER_ID || !refreshToken) throw new Error("Invalid token input");
+  if (!isValidDriverId(driverId) || isOwner(driverId, env) || !refreshToken) throw new Error("Invalid token input");
   const key = keyOrThrow(env);
   const blob = encryptToken(refreshToken, key, tokenAad(driverId, env));
   return (deps.store ?? getDriverStore()).setSpotifyBlobIfExists(driverId, blob);

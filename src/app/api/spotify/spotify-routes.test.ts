@@ -11,6 +11,7 @@ import { GET as callbackGET } from "./callback/route";
 import { POST as connectPOST } from "./connect/route";
 import { DELETE as connectionDELETE, GET as connectionGET } from "./connection/route";
 import { GET as loginGET } from "./login/route";
+import "../../../../tests/helpers/owner";
 
 const SESSION_SECRET = "3f9a1c7e5b2d48806ae1f4c93d7b05e2a8c61f9d04b37e5a2c8d1f6039ab74ce";
 const RT = "RT-SENTINEL-do-not-leak-0123456789";

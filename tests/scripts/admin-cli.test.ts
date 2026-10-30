@@ -12,7 +12,7 @@ const URL_SECRET = "https://very-secret-host.upstash.example";
 const TOKEN_SECRET = "AXsecretRedisTokenValue";
 const T0 = 1_800_000_000_000;
 
-function harness(opts: { confirm?: boolean; tty?: boolean; secret?: string } = {}) {
+function harness(opts: { confirm?: boolean; tty?: boolean; secret?: string; owner?: string } = {}) {
   const out: string[] = [];
   const err: string[] = [];
   const created: string[] = [];
@@ -25,6 +25,7 @@ function harness(opts: { confirm?: boolean; tty?: boolean; secret?: string } = {
     FINN_SESSION_SECRET: SECRET,
     KV_REST_API_URL: URL_SECRET,
     KV_REST_API_TOKEN: TOKEN_SECRET,
+    ...(opts.owner !== undefined ? { FINN_OWNER_DRIVER_ID: opts.owner } : {}),
   };
   const go = (argv: string[]) =>
     run(argv, {
@@ -387,5 +388,75 @@ describe("owner CLI: Spotify token custody (delivery 4)", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("owner CLI: the registered owner (FINN_OWNER_DRIVER_ID of the script's environment)", () => {
+  const withDrivers = async (h: ReturnType<typeof harness>) => {
+    const owner = await h.store.createDriver({ label: "Dono" });
+    const guest = await h.store.createDriver({ label: "Convidado" });
+    return { owner: owner.driverId, guest: guest.driverId };
+  };
+
+  it("driver:list marks only the owner line with (dono); the variable's stray newline/space is tolerated", async () => {
+    const h = harness({ owner: "placeholder" });
+    const ids = await withDrivers(h);
+    const h2 = harness({ owner: ` ${ids.owner}\n` });
+    for (const d of await h.store.listDrivers()) await (h2.store as unknown as { drivers: Map<string, unknown> }).drivers.set(d.driverId, d);
+    expect(await h2.go(["driver:list", "--env", "preview"])).toBe(0);
+    const lines = h2.out.filter((l) => l.includes("\t"));
+    expect(lines).toHaveLength(2);
+    expect(lines.filter((l) => l.endsWith("\t(dono)"))).toHaveLength(1);
+    expect(lines.find((l) => l.startsWith(ids.owner))).toMatch(/\(dono\)$/);
+    expect(lines.find((l) => l.startsWith(ids.guest))).not.toMatch(/dono/);
+    expect(h2.err.join("\n")).not.toMatch(/FINN_OWNER_DRIVER_ID/);
+  });
+
+  it("without the variable (or invalid, or the legacy id): no mark and a short warning", async () => {
+    for (const owner of [undefined, "", "drv_short", "drv_legacy_owner_000000000"]) {
+      const h = harness(owner === undefined ? {} : { owner });
+      await withDrivers(h);
+      expect(await h.go(["driver:list", "--env", "preview"])).toBe(0);
+      expect(h.out.join("\n")).not.toContain("(dono)");
+      expect(h.err.join("\n")).toContain("FINN_OWNER_DRIVER_ID não definida neste ambiente");
+    }
+  });
+
+  it.each([
+    ["driver:revoke", /derruba as sessões do carro.*token legado e o A2A/],
+    ["driver:purge", /apaga os endereços ditados.*Spotify do carro .* continua/],
+    ["driver:rotate", /invalida as sessões atuais.*token legado e o A2A não/],
+  ])("%s on the owner prints a clear warning and still asks the normal confirmation (declined = nothing changes)", async (command, effect) => {
+    const h = harness({ confirm: false });
+    const ids = await withDrivers(h);
+    const h2 = harness({ confirm: false, owner: ids.owner });
+    for (const d of await h.store.listDrivers()) (h2.store as unknown as { drivers: Map<string, unknown> }).drivers.set(d.driverId, d);
+    expect(await h2.go([command, ids.owner, "--env", "preview"])).toBe(1);
+    expect(h2.err.join("\n")).toMatch(/ATENÇÃO: este motorista é o DONO/);
+    expect(h2.err.join("\n")).toMatch(effect);
+    expect(h2.confirm).toHaveBeenCalledTimes(1);
+    expect((h2.confirm.mock.calls[0] as unknown as string[])[0]).toMatch(/^\[DONO\]/);
+    expect((await h2.store.getDriver(ids.owner))?.status).toBe("active");
+    expect(h2.err.join("\n")).not.toContain(ids.owner); // no id beyond what the target line already shows (stdout)
+  });
+
+  it("a guest gets no owner warning, and revoking the owner after confirmation works", async () => {
+    const h = harness({ confirm: true });
+    const ids = await withDrivers(h);
+    const h2 = harness({ confirm: true, owner: ids.owner });
+    for (const d of await h.store.listDrivers()) (h2.store as unknown as { drivers: Map<string, unknown> }).drivers.set(d.driverId, d);
+    expect(await h2.go(["driver:rotate", ids.guest, "--env", "preview"])).toBe(0);
+    expect(h2.err.join("\n")).not.toMatch(/DONO/);
+    expect(await h2.go(["driver:revoke", ids.owner, "--env", "preview"])).toBe(0);
+    expect((await h2.store.getDriver(ids.owner))?.status).toBe("revoked");
+  });
+
+  it("without a TTY the owner still needs --yes (unchanged rule)", async () => {
+    const h = harness({ tty: false });
+    const ids = await withDrivers(h);
+    const h2 = harness({ tty: false, owner: ids.owner });
+    for (const d of await h.store.listDrivers()) (h2.store as unknown as { drivers: Map<string, unknown> }).drivers.set(d.driverId, d);
+    expect(await h2.go(["driver:revoke", ids.owner, "--env", "preview"])).toBe(1);
+    expect((await h2.store.getDriver(ids.owner))?.status).toBe("active");
   });
 });

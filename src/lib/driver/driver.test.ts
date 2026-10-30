@@ -29,6 +29,35 @@ function setup() {
 }
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
 
+describe("MemoryDriverStore.listDrivers", () => {
+  it("lists drivers created directly and via redeem, oldest first, with status", async () => {
+    const { store, clock } = setup();
+    const a = await store.createDriver({ label: "A" });
+    clock.t += 10;
+    const { code } = await store.createInvite({ label: "B", maxUses: 1, expiresAt: T0 + 1000 });
+    const b = (await store.redeemInvite(code))!;
+    await store.revokeDriver(a.driverId);
+    const list = await store.listDrivers();
+    expect(list.map((d) => [d.driverId, d.label, d.status, d.createdAt])).toEqual([
+      [a.driverId, "A", "revoked", T0],
+      [b.driverId, "B", "active", T0 + 10],
+    ]);
+    list[0].label = "mutated";
+    expect((await store.listDrivers())[0].label).toBe("A");
+  });
+});
+
+describe("MemoryDriverStore.revokeInvite", () => {
+  it("returns true for an existing invite, false for unknown or malformed", async () => {
+    const { store } = setup();
+    const { code } = await store.createInvite({ label: "I", maxUses: 1, expiresAt: T0 + 1000 });
+    expect(await store.revokeInvite(code)).toBe(true);
+    expect(await store.revokeInvite(generateInviteCode())).toBe(false);
+    expect(await store.revokeInvite("zzz")).toBe(false);
+    expect((await store.listDriversDetailed()).skipped).toBe(0);
+  });
+});
+
 describe("session token", () => {
   it("round-trips and expires at 90 days", async () => {
     const { store } = setup();
@@ -210,6 +239,7 @@ describe("createDriverStore env selection (fail closed)", () => {
 /** Mock Redis emulating the semantics of our 3 scripts; records every call. */
 function mockRedis() {
   const hashes = new Map<string, Record<string, string>>();
+  const sets = new Map<string, Set<string>>();
   const calls: { op: string; keys: string[] }[] = [];
   const redis: RedisLike = {
     async hgetall(key) {
@@ -222,6 +252,15 @@ function mockRedis() {
       hashes.set(key, { ...(hashes.get(key) ?? {}), ...v });
       return 1;
     },
+    async sadd(key, member) {
+      calls.push({ op: "sadd", keys: [key] });
+      sets.set(key, (sets.get(key) ?? new Set()).add(member));
+      return 1;
+    },
+    async smembers(key) {
+      calls.push({ op: "smembers", keys: [key] });
+      return [...(sets.get(key) ?? [])];
+    },
     async eval(script, ks, args) {
       calls.push({ op: script === REDEEM_SCRIPT ? "redeem" : script === REVOKE_SCRIPT ? "revoke" : "rl", keys: ks });
       if (script === REDEEM_SCRIPT) {
@@ -229,11 +268,13 @@ function mockRedis() {
         if (!inv || inv.revoked === "1" || Number(inv.uses) >= Number(inv.maxUses) || Number(inv.expiresAt) <= Number(args[0])) return [0];
         inv.uses = String(Number(inv.uses) + 1);
         hashes.set(ks[1], { driverId: args[1], label: inv.label, status: "active", tokenVersion: "1", createdAt: args[2] });
+        sets.set(ks[2], (sets.get(ks[2]) ?? new Set()).add(args[1]));
         return [1, inv.label];
       }
       if (script === REVOKE_SCRIPT) {
         const h = hashes.get(ks[0]);
-        if (h) h[args[0]] = args[1];
+        if (!h) return 0;
+        h[args[0]] = args[1];
         return 1;
       }
       if (script === RATELIMIT_SCRIPT) {
@@ -245,7 +286,7 @@ function mockRedis() {
       throw new Error("unexpected script");
     },
   };
-  return { redis, hashes, calls };
+  return { redis, hashes, sets, calls };
 }
 
 describe("UpstashDriverStore (mock client, no network)", () => {
@@ -313,6 +354,81 @@ describe("UpstashDriverStore (mock client, no network)", () => {
     expect((await store.getDriver(b.driverId))?.label).toBe("B");
     expect(await store.getDriver("drv_" + "Z".repeat(22))).toBeNull();
     expect(await store.getDriver("../x")).toBeNull();
+  });
+
+  it("listDrivers: index fed by createDriver and by the redeem EVAL (3rd key), no secret, skips dangling ids", async () => {
+    const { store, sets, calls, clock } = mk();
+    const a = await store.createDriver({ label: "A" });
+    clock.t = T0 + 5;
+    const { code } = await store.createInvite({ label: "B", maxUses: 1, expiresAt: T0 + 1000 });
+    const b = (await store.redeemInvite(code))!;
+    expect(calls.find((c) => c.op === "redeem")!.keys[2]).toBe("finn:preview:drivers");
+    expect([...sets.get("finn:preview:drivers")!].sort()).toEqual([a.driverId, b.driverId].sort());
+    sets.get("finn:preview:drivers")!.add("drv_" + "Q".repeat(22)); // dangling id
+    sets.get("finn:preview:drivers")!.add("../evil");
+    const list = await store.listDrivers();
+    expect(list.map((d) => d.driverId)).toEqual([a.driverId, b.driverId]);
+    expect(list.map((d) => d.label)).toEqual(["A", "B"]);
+    expect(JSON.stringify(list)).not.toMatch(/pepper|secret|token":/i);
+    expect(Object.keys(list[0]).sort()).toEqual(["createdAt", "driverId", "label", "status", "tokenVersion"]);
+    // a failed redeem adds nothing
+    expect(await store.redeemInvite(code)).toBeNull();
+    expect(sets.get("finn:preview:drivers")!.size).toBe(4);
+  });
+
+  it("listDrivers skips corrupt hashes (odd field count, bad status, dangling id) and counts them", async () => {
+    const { store, redis, hashes, sets } = mk();
+    const good = await store.createDriver({ label: "Good" });
+    const odd = await store.createDriver({ label: "Odd" });
+    const badStatus = await store.createDriver({ label: "Bad" });
+    hashes.get(`finn:preview:driver:${badStatus.driverId}`)!.status = "weird";
+    sets.get("finn:preview:drivers")!.add("drv_" + "Q".repeat(22)); // dangling
+    sets.get("finn:preview:drivers")!.add("not-an-id");
+    const wrapped: RedisLike = {
+      ...redis,
+      hgetall: async (key) => (key.endsWith(odd.driverId) ? ["a", "b", "c"] : redis.hgetall(key)),
+    };
+    const s2 = new UpstashDriverStore(wrapped, keyPrefix("preview"), () => T0, PEPPER);
+    const r = await s2.listDriversDetailed();
+    expect(r.drivers.map((d) => d.driverId)).toEqual([good.driverId]);
+    expect(r.skipped).toBe(4);
+    expect((await s2.listDrivers()).map((d) => d.driverId)).toEqual([good.driverId]);
+    // a network failure is NOT swallowed as corruption
+    const down: RedisLike = { ...redis, hgetall: async () => { throw new Error("net"); } };
+    await expect(new UpstashDriverStore(down, keyPrefix("preview"), () => T0, PEPPER).listDrivers()).rejects.toThrow(/unavailable/i);
+  });
+
+  it("revokeInvite returns whether the invite existed and never creates one", async () => {
+    const { store, hashes } = mk();
+    const { code } = await store.createInvite({ label: "I", maxUses: 1, expiresAt: T0 + 1000 });
+    const before = hashes.size;
+    expect(await store.revokeInvite(code)).toBe(true);
+    expect(await store.revokeInvite(code)).toBe(true);
+    expect(await store.revokeInvite(generateInviteCode())).toBe(false);
+    expect(await store.revokeInvite("not a code")).toBe(false);
+    expect(hashes.size).toBe(before);
+  });
+
+  it("a missing pepper is its own error, never 'Redis unavailable', and nothing is written", async () => {
+    const m = mockRedis();
+    const noPepper = new UpstashDriverStore(m.redis, keyPrefix("preview"), () => T0);
+    const prev = process.env.FINN_INVITE_PEPPER;
+    delete process.env.FINN_INVITE_PEPPER;
+    try {
+      for (const op of [
+        () => noPepper.createInvite({ label: "A", maxUses: 1, expiresAt: T0 + 1000 }),
+        () => noPepper.revokeInvite("FINN-ABCD-EFGH"),
+        () => noPepper.redeemInvite("FINN-ABCD-EFGH"),
+      ]) {
+        const e = await op().then(() => null, (x: Error) => x);
+        expect(e).toBeInstanceOf(Error);
+        expect(e!.name).not.toBe("DriverStoreUnavailableError");
+        expect(e!.message).toMatch(/FINN_INVITE_PEPPER/);
+      }
+      expect(m.hashes.size).toBe(0);
+    } finally {
+      if (prev !== undefined) process.env.FINN_INVITE_PEPPER = prev;
+    }
   });
 
   it("rate limit counter increments", async () => {

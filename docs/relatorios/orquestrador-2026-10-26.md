@@ -17,6 +17,11 @@ Etapa 1 (persistência e identidade), sessão de 2026-10-26. Formato da Seção 
 
 Em `main`: nada. Em branches locais ou no PR #1: ver `ESTADO_ATUAL.md`. Entrega 1 tem 12 arquivos e cerca de 1,5 mil linhas, todos em `src/lib/driver/`, `package.json`, `package-lock.json` e docs.
 
+9. D1 revertida para Redis único (plano Free = 1 banco por conta; dono não quer gastar). Dono autorizou o orquestrador a gerir as variáveis da Vercel até o fim do desenvolvimento. B3 fechado (não fazer). `FINN_LEGACY_TOKEN_ENABLED=1` ligado nos 3 ambientes.
+10. Entrega 2 delegada ao `api` (rotas `/api/session`, `authorizeDriver`, token legado, scripts do dono, smoke) e concluída: `npm test` 493 passaram, 4 ignorados, 0 falharam; typecheck, lint e `npm run build` limpos; verificado pelo orquestrador. qa e security-review em andamento sobre o diff estável. Detalhe: `driver-session-routes-2026-10-26.md`.
+
+11. Entrega 2, revisão: qa (nenhum bloqueante, 7 não bloqueantes; Lua testado em Redis 8 real em container local) e security-review (1 crítico, 3 altos, 3 médios, 6 baixos). Rodada de correções (9 itens): `npm test` 533 passaram, 4 ignorados, 0 falharam; typecheck, lint e build limpos; verificado pelo orquestrador. Escopo limpo, `/api/agents/*` intocado.
+
 ## Achados e como foram tratados
 
 - **Bloqueante (qa B1 = security-review F1):** com `automaticDeserialization:false` o SDK devolve HGETALL como array plano; `getDriver` e `redeemInvite` davam sempre `null` no Upstash real. Confirmado por mim em `node_modules/@upstash/redis/nodejs.js:619`. Corrigido (`hashToRecord`) e coberto por teste com o `Redis` real do SDK e `fetch` falso.
@@ -24,11 +29,14 @@ Em `main`: nada. Em branches locais ou no PR #1: ver `ESTADO_ATUAL.md`. Entrega 
 - **Médios e baixos:** timeout e retry (SDK ainda faz 2 tentativas com `retry:false`; usado `retries: 0`), `Number(null)=0` aprovando rate limit, fallback para o fake com `NODE_ENV=production`, assinatura base64url maleável, validação de `tv`/`exp`/`iat`, segredo fraco, validação de entradas, prefixo do rate limit, IPv6 /64. Todos corrigidos; detalhe por achado em `driver-store-core-2026-10-26.md`.
 - **Aprovados pelo dono e implementados (rodada 3):** pepper HMAC (`FINN_INVITE_PEPPER`, formato 64 hex, rejeitado se igual ao segredo de sessão) e `rotateSessions` atômico (Lua).
 - **M2 (D1):** o dono escolheu separar o Redis (opção b); como o plano Free do Upstash permite 1 banco por conta e ele não quer gastar nada, **reverteu para um banco único** (decisão de custo, 2026-10-26). `finn-upstash` reconectado a Production, Preview e Development. Risco aceito e controles compensatórios em `ESTADO_ATUAL.md`.
+- **Entrega 2:** C1 (crítico) não é defeito do código e sim do que ainda falta (entregas 3 e 4): virou regra de processo, sem convites em produção até lá. A1/A2/A3/B4 aguardam decisão do dono (ver `ESTADO_ATUAL.md` débitos 13 a 15). Os outros achados foram corrigidos.
 - **Em fila para o dono:** B3 (vínculo de ambiente), com recomendação de não fazer.
 - **Sem achado:** comparação em tempo constante, atomicidade do Lua (lido linha a linha, hipótese sem interpretador), `driverId` com 128 bits, seleção do store falha fechada.
 
 ## Testes
 
+- Entrega 2, após correções: `npm test` 533 passaram, 4 ignorados, 0 falharam (40 arquivos); typecheck, lint e build limpos.
+- Entrega 2: `npm test` 493 passaram, 4 ignorados, 0 falharam (39 arquivos); `npm run typecheck`, `npm run lint`, `npm run build` limpos.
 - Antes da entrega: `npm test` 379 passaram, 4 ignorados.
 - Após rodada de correções: `npm test` 431 passaram, 4 ignorados, 0 falharam (35 arquivos); `npm run typecheck` e `npm run lint` limpos. Lote completo rodado pelo orquestrador, não só relatado pelo agente.
 - Após rodada 3 (pepper e `rotateSessions`): `npm test` 442 passaram, 4 ignorados, 0 falharam (35 arquivos), 63 testes em `src/lib/driver`; typecheck e lint limpos.

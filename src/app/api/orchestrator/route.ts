@@ -1,5 +1,5 @@
 import { agents } from "@/agents/registry";
-import { authorize } from "@/lib/auth";
+import { authorizeDriver } from "@/lib/auth";
 import type { OrchestratorRequest } from "@/lib/contracts/client-events";
 import { orchestrate } from "@/orchestrator/orchestrate";
 
@@ -11,8 +11,8 @@ function getCookie(request: Request, name: string): string | undefined {
 }
 
 export async function POST(request: Request) {
-  const denied = authorize(request);
-  if (denied) return denied;
+  const auth = await authorizeDriver(request);
+  if (auth instanceof Response) return auth;
 
   let body: Partial<OrchestratorRequest>;
   try {

@@ -31,11 +31,12 @@ interface DriverStore {
   createDriver(input: { label: string }): Promise<Driver>;
   getDriver(driverId: string): Promise<Driver | null>;
   revokeDriver(driverId: string): Promise<void>;
+  listDriversDetailed(): Promise<{ drivers: Driver[]; skipped: number }>; // ignora hash corrompido e conta quantos
   listDrivers(): Promise<Driver[]>; // índice `drivers` (SADD no resgate); usado só pelo script do dono: id, label, status, createdAt; nunca segredo
   rotateSessions(driverId: string): Promise<void>; // incrementa tokenVersion: invalida todos os tokens antigos sem banir o motorista
   createInvite(input: { label: string; maxUses: number; expiresAt: number }): Promise<{ code: string }>;
   redeemInvite(code: string): Promise<Driver | null>; // atômico; null se inválido/esgotado/expirado/revogado
-  revokeInvite(code: string): Promise<void>;
+  revokeInvite(code: string): Promise<boolean>; // true se o convite existia (o script avisa erro de digitação ou pepper de outro ambiente)
   incrementRateLimit(key: string, windowSeconds: number): Promise<number>;
 }
 ```
@@ -86,3 +87,4 @@ Rate limit geral por motorista, métricas, OAuth do Spotify como login (opção 
 - M2 (credencial do Redis separada) decidido e revertido: um Redis só, por custo (ver `ESTADO_ATUAL.md`).
 - 2026-10-26: `listDrivers()` e índice `drivers` adicionados pelo orquestrador (adição mecânica à decisão A: sem listagem o dono não tem como saber qual `driverId` revogar). Sem decisão de produto envolvida.
 - 2026-10-26: B3 (vínculo de ambiente no token) fechado como **não fazer**: segredos de sessão distintos por ambiente já impedem token de preview em produção.
+- 2026-10-26 (entrega 2, rodada de correções): `revokeInvite` devolve `boolean`; `listDriversDetailed()` acrescentado (registros corrompidos são pulados e contados); resgate confere `TYPE` do índice `drivers` antes de escrever; `/api/session` exige `Content-Type: application/json` (415) e corpo <= 2 KB (413) antes de qualquer Redis.

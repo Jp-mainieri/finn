@@ -19,13 +19,18 @@ export interface DriverStore {
   createDriver(input: { label: string }): Promise<Driver>;
   getDriver(driverId: string): Promise<Driver | null>;
   revokeDriver(driverId: string): Promise<void>;
+  /** Owner-script only: every driver in the `drivers` index (id, label, status, createdAt; no secret), oldest first. */
+  listDrivers(): Promise<Driver[]>;
+  /** Same as listDrivers plus how many index entries were skipped (invalid id, missing or corrupt hash). */
+  listDriversDetailed(): Promise<{ drivers: Driver[]; skipped: number }>;
   /** Atomically increments tokenVersion of an ACTIVE driver (old tokens stop validating). No-op if missing/revoked. */
   rotateSessions(driverId: string): Promise<void>;
   /** `expiresAt` is epoch milliseconds (future, at most 1 year). `maxUses` 1..1000. */
   createInvite(input: { label: string; maxUses: number; expiresAt: number }): Promise<{ code: string }>;
   /** Atomic. Null when invalid, exhausted, expired, revoked or unknown (indistinguishable). */
   redeemInvite(code: string): Promise<Driver | null>;
-  revokeInvite(code: string): Promise<void>;
+  /** True when the invite existed and is now revoked (or already was); false when not found or malformed. Never creates anything. */
+  revokeInvite(code: string): Promise<boolean>;
   /** Increments a counter scoped by `key` and returns the new value; TTL set on first hit of the window. */
   incrementRateLimit(key: string, windowSeconds: number): Promise<number>;
 }
@@ -53,6 +58,8 @@ const RATE_KEY_RE = /^ratelimit:[A-Za-z0-9:._-]{1,100}$/;
 export const keys = {
   driver: (prefix: string, driverId: string) => `${prefix}driver:${driverId}`,
   invite: (prefix: string, codeHash: string) => `${prefix}invite:${codeHash}`,
+  /** Set of every driverId (fed by createDriver and, inside the same EVAL, by the invite redeem). */
+  driversIndex: (prefix: string) => `${prefix}drivers`,
   spotifyIndex: (prefix: string, spotifyUserId: string) => `${prefix}spotify-index:${spotifyUserId}`,
   /** Only `ratelimit:`-prefixed keys with a restricted charset are accepted. */
   rateLimit: (prefix: string, key: string) => {

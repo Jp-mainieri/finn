@@ -20,6 +20,7 @@ describe("POST /api/realtime/transcribe", () => {
 
   beforeEach(() => {
     vi.stubEnv("FINN_API_TOKEN", "s3cret");
+    vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", "1");
     vi.stubEnv("GROQ_API_KEY", "groq-key-123");
     vi.stubEnv("OPENAI_API_KEY", "sk-openai-123");
     vi.stubGlobal("fetch", fetchMock);

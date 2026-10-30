@@ -11,16 +11,24 @@ vi.mock("@/lib/neuralake/client", async (importOriginal) => ({
 describe("[core] auth — Bearer FINN_API_TOKEN", () => {
   const h = useHarness();
 
+  // `unconfigured`: status when FINN_API_TOKEN is empty. /api/agents/* keeps authorize() (503);
+  // /api/orchestrator uses authorizeDriver, where an unset legacy token simply never matches (401, still closed).
   const protectedCalls = {
-    "POST /api/orchestrator": (token?: string | null) =>
-      callOrchestrator({ transcript: "pausa a música" }, { token }),
-    "POST /api/agents/spotify": (token?: string | null) =>
-      callA2A("spotify", messageSend("pausa a música"), { token }),
-    "POST /api/agents/waze": (token?: string | null) =>
-      callA2A("waze", messageSend("me leva pro aeroporto"), { token }),
+    "POST /api/orchestrator": {
+      unconfigured: 401,
+      call: (token?: string | null) => callOrchestrator({ transcript: "pausa a música" }, { token }),
+    },
+    "POST /api/agents/spotify": {
+      unconfigured: 503,
+      call: (token?: string | null) => callA2A("spotify", messageSend("pausa a música"), { token }),
+    },
+    "POST /api/agents/waze": {
+      unconfigured: 503,
+      call: (token?: string | null) => callA2A("waze", messageSend("me leva pro aeroporto"), { token }),
+    },
   };
 
-  describe.each(Object.entries(protectedCalls))("%s", (_name, call) => {
+  describe.each(Object.entries(protectedCalls))("%s", (_name, { call, unconfigured }) => {
     it("rejects a request without Authorization with 401 + WWW-Authenticate", async () => {
       const res = await call(null);
       expect(res.status).toBe(401);
@@ -36,9 +44,9 @@ describe("[core] auth — Bearer FINN_API_TOKEN", () => {
       expect((await call(token)).status).toBe(401);
     });
 
-    it("fails closed with 503 when FINN_API_TOKEN is not configured", async () => {
+    it("fails closed when FINN_API_TOKEN is not configured", async () => {
       vi.stubEnv("FINN_API_TOKEN", "");
-      expect((await call(TEST_TOKEN)).status).toBe(503);
+      expect((await call(TEST_TOKEN)).status).toBe(unconfigured);
     });
 
     it("never reaches an agent, the model or Spotify when rejected", async () => {

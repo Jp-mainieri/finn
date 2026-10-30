@@ -11,7 +11,8 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 - Upstash for Redis (`finn-upstash`, plano Free) provisionado pelo dono em 2026-10-26, ligado a Production, Preview e Development: **um banco só, mesma credencial**. Tentativa de separar (D1 opção b) foi revertida no mesmo dia, ver Decisões provisórias. Variáveis: `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `KV_REST_API_READ_ONLY_TOKEN`, `KV_URL`, `REDIS_URL`.
 - `FINN_SESSION_SECRET` e `FINN_INVITE_PEPPER` configurados na Vercel pelo orquestrador (autorização do dono, 2026-10-26): 6 valores distintos (um par por ambiente), gerados com `openssl rand -hex 32` e enviados por pipe sem exibição. Production e Preview são `Sensitive`; Development não pode ser (limite da Vercel) e fica legível por `vercel env pull` para quem tem acesso ao projeto.
 - Etapa 1, entrega 1 (núcleo `src/lib/driver/`): implementada e corrigida após qa e security-review, em `feat/driver-store-core` (local, sem PR ainda). Relatórios: [`relatorios/driver-store-core-2026-10-26.md`](./relatorios/driver-store-core-2026-10-26.md), [`revisoes/driver-store-core-security-review.md`](./revisoes/driver-store-core-security-review.md), [`relatorios/orquestrador-2026-10-26.md`](./relatorios/orquestrador-2026-10-26.md). Rodada 3 (pepper do convite e `rotateSessions`) concluída: 442 testes passam, typecheck e lint limpos. Falta: push e PR (aguarda OK do dono), depois entrega 2.
-- PRs: #1 adoção do padrão (aberto, sem merge). Entrega 1 empilha sobre #1 e sobre a branch do contrato.
+- Entrega 2 (rotas de sessão, `authorizeDriver`, scripts do dono, smoke) implementada em `feat/driver-session-routes` (local): 533 testes, build ok; qa e security-review concluídos e correções aplicadas; falta push e PR (aguarda OK), mais as decisões A2, A1, B4 e A3 do dono. Relatório: [`relatorios/driver-session-routes-2026-10-26.md`](./relatorios/driver-session-routes-2026-10-26.md).
+- PRs (todos abertos, sem merge, empilhados): #1 adoção do padrão; #2 contrato e núcleo (entrega 1); #3 rotas de sessão e scripts (entrega 2). Ordem de merge: #1, #2, #3.
 
 ## Decisões fechadas
 
@@ -25,6 +26,11 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 - 2026-10-26: B3 fechado (não fazer). Entrega 2 liberada.
 - 2026-10-26: após o security-review da entrega 1, o dono aprovou duas adições ao contrato: pepper HMAC (`FINN_INVITE_PEPPER`) no hash do convite e `rotateSessions` (incrementa `tokenVersion` sem banir o motorista). Motivo: baratas agora, caras depois de haver convites emitidos.
 - 2026-10-26: decisões técnicas do agente aceitas (provisórias, ajustáveis por parâmetro): rate limit do resgate 10 por 600 s por IP; IP ausente ou inválido cai num balde próprio de 3 por 600 s; teto de espera do Redis 2 s sem retry (o EVAL de resgate nunca é retentado); tempo em ms em `expiresAt`, em s em `iat`/`exp`.
+
+- **REGRA DE PROCESSO (security-review da entrega 2, C1 crítico, 2026-10-26): NENHUM convite pode ser emitido em produção antes das entregas 3 e 4.** Hoje o orquestrador autentica o convidado mas não usa o `driverId`: Spotify cai no `SPOTIFY_REFRESH_TOKEN` do dono e o Waze lê e grava o livro de endereços global (casa do dono). Quem resgatar convite controlaria o Spotify do dono. A entrega 3 deve começar pela trava (sem `driverId` do dono, desligar o Spotify do servidor e o livro global). O smoke `smoke:session` só roda a etapa do orquestrador com opt-in explícito.
+- 2026-10-26: flag `FINN_LEGACY_TOKEN_ENABLED` removida de Preview e Development (segurança, superfície do token legado); fica só em Production até o PWA novo (entrega 5). O token legado não expira e o `driverId` dele não tem registro no store.
+
+- 2026-10-27 (A2, security-review da entrega 2): o A2A (`/api/agents/*`) passa a exigir segredo próprio `FINN_A2A_TOKEN`; sem a variável o endpoint fica desligado (falha fechada) e o `FINN_API_TOKEN` deixa de abri-lo. Recomendação do orquestrador aceita pelo dono. Variável NÃO criada ainda (ninguém usa o A2A); criar quando houver cliente. Reabre se algum cliente externo precisar do A2A.
 
 ## Decisões provisórias
 
@@ -55,6 +61,10 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 9. `@upstash/redis` fixado em 1.40.0 sem `npm audit` nem checagem de procedência. Fazer antes do beta.
 10. Rotas devem tratar `DriverStoreUnavailableError` como negação com erro falável e sem logar o erro (entrega 2).
 11. Limite global de resgate de convite não existe (só por IP); tokens de 90 dias sem vínculo de ambiente (B3, em fila).
+13. ~~`/api/agents/*` aceita `FINN_API_TOKEN`~~ resolvido pela decisão A2 de 2026-10-27 (branch `feat/a2a-own-token`, em implementação).
+14. Todo POST em `/api/session` gasta ao menos 1 comando Redis mesmo após rate limit e não há limite global: risco de esgotar a cota do plano Free sem autenticação (A3). Falta regra de rate limit no firewall da Vercel e alerta de uso no Upstash (ação do dono).
+15. Resgate de convite não é idempotente com resposta perdida (qa N4, security B4): retry cria motorista órfão ou 401. Decisão de produto pendente.
+16. Sem limite por motorista nas rotas que chamam IA (M3). `src/lib/spotify/auth.ts:129` faz `console.warn(..., err)` (pré-existente): conferir se `err` pode conter dado sensível.
 12. Singleton do `MemoryDriverStore` em dev com bundles separados do Next (hipótese do qa), e build do cliente se o PWA importar o barrel `src/lib/driver` (importa `node:crypto`): não importar do PWA.
 
 ## Pré-lançamento (antes de abrir a usuários reais)

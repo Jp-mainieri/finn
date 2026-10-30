@@ -25,6 +25,8 @@ export interface OrchestrateOptions {
   /** Echoed from the previous turn: its agent gets this turn even without a keyword match. */
   continuation?: Continuation;
   timeoutMs?: number;
+  /** Proven by the route (`authorizeDriver`); forwarded to agents as `AgentTaskInput.driverId`. */
+  driverId: string;
   driverContext?: DriverContext;
 }
 
@@ -35,6 +37,7 @@ async function runAgent(
   contextId: string,
   timeoutMs: number,
   continuation: unknown,
+  driverId: string,
   driverContext?: DriverContext,
 ): Promise<AgentResult> {
   const controller = new AbortController();
@@ -57,7 +60,7 @@ async function runAgent(
 
   try {
     return await Promise.race([
-      agent.handle({ transcript, contextId, signal: controller.signal, continuation, driverContext }),
+      agent.handle({ transcript, contextId, signal: controller.signal, continuation, driverId, driverContext }),
       timeout,
     ]);
   } catch (err) {
@@ -93,7 +96,7 @@ export function aggregate(results: AgentResult[]): OrchestratorResponse {
  */
 export async function orchestrate(
   transcript: string,
-  { agents, contextId, continuation, timeoutMs = AGENT_TIMEOUT_MS, driverContext }: OrchestrateOptions,
+  { agents, contextId, continuation, timeoutMs = AGENT_TIMEOUT_MS, driverId, driverContext }: OrchestrateOptions,
 ): Promise<OrchestratorResponse> {
   if (transcript === "__GREETING__") {
     try {
@@ -140,6 +143,7 @@ export async function orchestrate(
         contextId,
         timeoutMs,
         resumed?.agent === id ? resumed.state : undefined,
+        driverId,
         driverContext,
       ),
     ),

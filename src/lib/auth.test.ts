@@ -243,11 +243,11 @@ describe("authorizeDriver", () => {
     });
   });
 
-  it("/api/agents/* uses only authorizeA2A() (not authorizeDriver)", () => {
+  it("/api/agents/* uses only guardA2A() (not authorizeDriver)", () => {
     for (const f of ["src/app/api/agents/[agent]/route.ts", "src/app/api/agents/[agent]/card/route.ts"]) {
       const src = readFileSync(f, "utf8");
       expect(src).not.toContain("authorizeDriver");
     }
-    expect(readFileSync("src/app/api/agents/[agent]/route.ts", "utf8")).toMatch(/\bauthorizeA2A\(request\)/);
+    expect(readFileSync("src/app/api/agents/[agent]/route.ts", "utf8")).toMatch(/\bguardA2A\(request\)/);
   });
 });

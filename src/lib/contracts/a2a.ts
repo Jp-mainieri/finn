@@ -20,13 +20,22 @@ export const AGENT_IDS: readonly AgentId[] = ["spotify", "waze"] as const;
 export interface DriverContext {
   /** Optional per-user Spotify refresh token (encrypted or raw from client setup), overriding SPOTIFY_REFRESH_TOKEN. */
   spotifyRefreshToken?: string;
-  /** Optional per-user saved addresses from the driver's device, merged with WAZE_SAVED_ADDRESSES. */
+  /**
+   * @deprecated Ignored by the server since delivery 3 (addresses live in the server store, per driver).
+   * Kept only so older PWA builds still type-check.
+   */
   savedAddresses?: Partial<Record<"casa" | "trabalho", string>>;
 }
 
 export interface AgentTaskInput {
   /** Full driver transcript for the turn. Agents ignore parts outside their domain. */
   transcript: string;
+  /**
+   * Driver that owns every resource this turn touches. Set ONLY by the server from
+   * `authorizeDriver` (or the fixed owner identity of A2A); never from a body, `driverContext`,
+   * `continuation` or cookie. Agents never read an id from anywhere else.
+   */
+  driverId: string;
   /** Conversation window id (A2A contextId). */
   contextId: string;
   /** Aborted by the orchestrator when the agent exceeds its time budget. */
@@ -143,6 +152,17 @@ export interface A2ASendRequest {
   params: { message: A2AMessage };
 }
 
+/**
+ * What an EXTERNAL A2A client receives as artifact `result`: no `toolCalls` (arguments and results carry
+ * addresses and URIs) and no `clientActions` (deep links carry the address). The in-process `AgentResult`
+ * keeps both for the PWA through the orchestrator.
+ */
+export interface A2APublicResult {
+  agent: AgentId;
+  status: TaskState;
+  speech: string;
+}
+
 export interface A2ATask {
   kind: "task";
   id: string;
@@ -151,7 +171,7 @@ export interface A2ATask {
   artifacts: {
     artifactId: string;
     name: "result";
-    parts: [A2ADataPart<AgentResult>];
+    parts: [A2ADataPart<A2APublicResult>];
   }[];
 }
 

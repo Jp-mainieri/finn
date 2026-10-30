@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Continuation } from "@/lib/contracts/a2a";
 import {
-  expectAgentResult,
+  expectPublicResult,
   expectFriendlySpeech,
   expectOrchestratorResponse,
   openUrls,
@@ -185,22 +185,24 @@ describe("[waze] saved addresses — casa / trabalho", () => {
     expect(openUrls(res)).toEqual([wazeUrl("Casa do Pão de Queijo, Rua Augusta")]);
   });
 
-  it("works over A2A too: input-required Task, then a follow-up carrying { continuation } in a data part", async () => {
+  it("works over A2A too: the artifact hides the continuation; the client echoes the state it knows in a data part", async () => {
     llm.scripts.waze = { turns: [call("navigate_to", { destination: "casa" }), say("Qual o endereço da sua casa?")] };
     const ask = await callA2A("waze", messageSend("me leva pra casa", { contextId: "ctx-a2a-home" }));
     const task = ask.json.result!;
     expect(task.status.state).toBe("input-required");
     const askResult = task.artifacts[0].parts[0].data;
-    expectAgentResult(askResult, "waze");
-    expect(askResult.continuation).toEqual({ pendingLabel: "casa" });
+    expectPublicResult(askResult, "waze");
+    expect(askResult.status).toBe("input-required");
 
     navigateThenConfirm("Rua Augusta, 123");
     const answer = await callA2A(
       "waze",
-      messageSend("Rua Augusta, 123", { contextId: "ctx-a2a-home", continuation: askResult.continuation }),
+      messageSend("Rua Augusta, 123", { contextId: "ctx-a2a-home", continuation: { pendingLabel: "casa" } }),
     );
     const done = answer.json.result!;
     expect(done.status.state).toBe("completed");
-    expect(openUrls(done.artifacts[0].parts[0].data)).toEqual([wazeUrl("Rua Augusta, 123")]);
+    expectPublicResult(done.artifacts[0].parts[0].data, "waze");
+    // A2A runs as the owner; no deep link or action leaves the server (the speech is the model's own sentence).
+    expect(JSON.stringify(answer.json)).not.toMatch(/waze\.com|clientActions|toolCalls/);
   });
 });

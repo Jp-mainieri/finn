@@ -135,4 +135,10 @@ export class MemoryDriverStore implements DriverStore {
     c.n += 1;
     return c.n;
   }
+
+  async peekRateLimit(key: string): Promise<number> {
+    keys.rateLimit(this.prefix, key);
+    const c = this.counters.get(key);
+    return c && c.resetAt > this.now() ? c.n : 0;
+  }
 }

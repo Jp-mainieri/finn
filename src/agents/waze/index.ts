@@ -1,8 +1,9 @@
 import { runToolLoop } from "@/lib/agent-runtime";
 import type { Agent, AgentResult } from "@/lib/contracts/a2a";
+import { DriverStoreUnavailableError } from "@/lib/driver/store";
 import { WAZE_TOOLS } from "@/lib/contracts/tools";
 import { getNeuralakeClient } from "@/lib/neuralake/client";
-import { getAddressBook, LayeredAddressBook } from "@/lib/waze/address-book";
+import { getAddressBook, type AddressBook } from "@/lib/waze/address-book";
 import { wazeAgentCard } from "./card";
 import { buildSystemPrompt } from "./prompt";
 import { createNavigateTo, parseContinuation } from "./tools";
@@ -83,10 +84,26 @@ export const wazeAgent: Agent = {
   card: wazeAgentCard,
 
   handle: async (input) => {
+    // Closed list: anything that is not exactly a known shape is ignored (the client can send anything).
     const continuation = parseContinuation(input.continuation);
-    const book = input.driverContext?.savedAddresses
-      ? new LayeredAddressBook(input.driverContext.savedAddresses, getAddressBook())
-      : getAddressBook();
+    // The book belongs to input.driverId (server-proven). driverContext.savedAddresses is ignored.
+    // It is resolved lazily, only when a label (casa/trabalho) or a pending answer needs it, so an explicit
+    // destination works even when Redis is down or unconfigured. A resolution failure is the same generic
+    // store error as a Redis failure (short spoken failure, never another book, nothing logged).
+    let resolved: AddressBook | undefined;
+    const bookOf = (): AddressBook => {
+      if (resolved) return resolved;
+      try {
+        resolved = getAddressBook(input.driverId);
+      } catch {
+        throw new DriverStoreUnavailableError();
+      }
+      return resolved;
+    };
+    const book: AddressBook = {
+      get: async (label) => bookOf().get(label),
+      set: async (label, address) => bookOf().set(label, address),
+    };
     const navigateTo = createNavigateTo(book, continuation);
     const result = await runToolLoop({
       agent: "waze",
@@ -94,7 +111,8 @@ export const wazeAgent: Agent = {
       systemPrompt: buildSystemPrompt(continuation),
       tools: WAZE_TOOLS,
       executors: { navigate_to: navigateTo },
-      input,
+      // Only the strictly parsed continuation travels on: hostile shapes were dropped above.
+      input: { ...input, continuation },
       fallbackErrorSpeech: "Não consegui definir a rota agora.",
       fastSpeech: wazeFastSpeech,
       deterministicFallback: async (taskInput) => {

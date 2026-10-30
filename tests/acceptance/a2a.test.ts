@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { SPOTIFY_TOOLS, WAZE_TOOLS } from "@/lib/contracts/tools";
 import nextConfig from "../../next.config";
-import { expectAgentResult, wazeUrl } from "../helpers/assertions";
+import { expectPublicResult } from "../helpers/assertions";
 import { useHarness } from "../helpers/harness";
 import { callA2A, getCard, messageSend, ORIGIN } from "../helpers/http";
 import { call, llm, say } from "../helpers/llm";
@@ -99,7 +99,7 @@ describe("[core] A2A message/send (JSON-RPC 2.0)", () => {
     expect(llm.calls).toHaveLength(0);
   });
 
-  it("[waze] returns a Task whose artifact is a valid AgentResult", async () => {
+  it("[waze] returns a Task whose artifact is only { agent, status, speech }", async () => {
     llm.scripts.waze = {
       turns: [call("navigate_to", { destination: "Aeroporto de Congonhas" }), say("Indo pro Aeroporto de Congonhas.")],
     };
@@ -119,12 +119,11 @@ describe("[core] A2A message/send (JSON-RPC 2.0)", () => {
     expect(part.kind).toBe("data");
 
     const result = part.data;
-    expectAgentResult(result, "waze");
+    expectPublicResult(result, "waze");
     expect(result.status).toBe(task.status.state);
     expect(task.status.message?.parts).toEqual([{ kind: "text", text: result.speech }]);
-    expect(result.clientActions).toEqual([
-      expect.objectContaining({ type: "open_url", url: wazeUrl("Aeroporto de Congonhas") }),
-    ]);
+    // No deep link, no tool arguments: addresses never leave the server over A2A.
+    expect(JSON.stringify(res.json)).not.toMatch(/waze\.com|toolCalls|clientActions/);
   });
 
   it("[waze] generates a contextId when the caller sends none", async () => {

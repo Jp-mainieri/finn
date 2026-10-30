@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
 import type { Agent, AgentResult } from "@/lib/contracts/a2a";
 import type { NeuralakeClient } from "@/lib/contracts/neuralake";
 import { WAZE_TOOLS } from "@/lib/contracts/tools";
@@ -33,7 +34,7 @@ function useModel(script: MockScript): MockNeuralakeClient {
 }
 
 const handle = (transcript: string, continuation?: unknown) =>
-  wazeAgent.handle({ transcript, contextId: "ctx", continuation });
+  wazeAgent.handle({ transcript, contextId: "ctx", continuation, driverId: LEGACY_OWNER_DRIVER_ID });
 
 beforeEach(() => {
   vi.stubEnv("WAZE_SAVED_ADDRESSES", "");
@@ -106,7 +107,7 @@ describe("wazeAgent", () => {
       ],
     });
     expect(second.continuation).toBeUndefined();
-    expect(await getAddressBook().get("casa")).toBe("Rua Augusta, 123");
+    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID).get("casa")).toBe("Rua Augusta, 123");
 
     // Turn 3: next time, the saved address is used without asking.
     useModel(navigateScript("minha casa"));
@@ -141,6 +142,24 @@ describe("wazeAgent", () => {
     const client = useModel(navigateScript("Shopping Iguatemi"));
     await handle("me leva pro Shopping Iguatemi", { unexpected: true });
     expect(client.calls[0].messages[0].content).not.toContain("Contexto deste turno");
+  });
+
+  it.each([
+    [{ pendingLabel: "../../etc" }],
+    [{ pendingLabel: { toString: "x" } }],
+    [{ pendingLabel: ["casa"] }],
+    [{ awaitingDestination: "true" }],
+    [{ driverId: "drv_legacy_owner_000000000" }],
+    [[{ pendingLabel: "casa" }]],
+    ["casa"],
+    [42],
+    [null],
+  ])("ignores a hostile continuation %j (no turn context, nothing saved)", async (hostile) => {
+    const client = useModel(navigateScript("Shopping Iguatemi"));
+    const res = await handle("me leva pro Shopping Iguatemi", hostile);
+    expect(client.calls[0].messages[0].content).not.toContain("Contexto deste turno");
+    expect(res.toolCalls[0].result).toEqual({ navigating_to: "Shopping Iguatemi" });
+    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID).get("casa")).toBeUndefined();
   });
 
   it("speaks a fallback when the model ends the turn without text", async () => {
@@ -185,7 +204,7 @@ describe("wazeAgent through the orchestrator", () => {
 
   it("round-trips the home-address continuation, even alongside music (UC7)", async () => {
     useModel(navigateScript("casa"));
-    const first = await orchestrate("toca minha playlist e me leva pra casa", { agents, contextId: "ctx" });
+    const first = await orchestrate("toca minha playlist e me leva pra casa", { agents, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
     expect(first.speech).toBe("Tocando sua playlist. Qual é o endereço da sua casa?");
     expect(first.clientActions).toEqual([]);
     expect(first.continuation).toEqual({ agent: "waze", state: { pendingLabel: "casa" } });
@@ -194,6 +213,7 @@ describe("wazeAgent through the orchestrator", () => {
     const second = await orchestrate("Rua Augusta, 123", {
       agents,
       contextId: "ctx",
+      driverId: LEGACY_OWNER_DRIVER_ID,
       continuation: first.continuation,
     });
     expect(second.results.map((r) => r.agent)).toEqual(["waze"]);
@@ -207,23 +227,112 @@ describe("wazeAgent through the orchestrator", () => {
     ]);
   });
 
-  it("prioritizes driverContext.savedAddresses for multi-user", async () => {
+  it("ignores driverContext.savedAddresses sent by the client", async () => {
     vi.stubEnv("WAZE_SAVED_ADDRESSES", JSON.stringify({ casa: "Env Casa" }));
     resetAddressBook();
     useModel(navigateScript("casa"));
     const res = await wazeAgent.handle({
       transcript: "me leva pra casa",
       contextId: "ctx",
+      driverId: LEGACY_OWNER_DRIVER_ID,
       driverContext: { savedAddresses: { casa: "Custom Driver Casa" } },
     });
     expect(res.status).toBe("completed");
     expect(res.clientActions).toEqual([
       {
         type: "open_url",
-        url: "https://waze.com/ul?q=Custom%20Driver%20Casa&navigate=yes",
+        url: "https://waze.com/ul?q=Env%20Casa&navigate=yes",
         label: "Navegar para casa",
       },
     ]);
+  });
+
+  it("a non-owner never reads the owner's seed nor writes into the owner's book", async () => {
+    vi.stubEnv("WAZE_SAVED_ADDRESSES", JSON.stringify({ casa: "Casa do Dono" }));
+    resetAddressBook();
+    const OTHER = "drv_" + "B".repeat(22);
+    useModel(navigateScript("casa"));
+    const asked = await wazeAgent.handle({ transcript: "me leva pra casa", contextId: "ctx", driverId: OTHER });
+    expect(asked).toMatchObject({ status: "input-required", continuation: { pendingLabel: "casa" }, clientActions: [] });
+
+    useModel(navigateScript("Rua do Outro, 9"));
+    await wazeAgent.handle({ transcript: "Rua do Outro, 9", contextId: "ctx", driverId: OTHER, continuation: asked.continuation });
+    expect(await getAddressBook(LEGACY_OWNER_DRIVER_ID).get("casa")).toBe("Casa do Dono");
+  });
+
+  describe("Redis down", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    function redisDown() {
+      vi.stubEnv("KV_REST_API_URL", "https://fake.upstash.example");
+      vi.stubEnv("KV_REST_API_TOKEN", "fake-token");
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "ERR secret-detail" }), { status: 500 }));
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    it("speaks a short failure, never falls back to the owner's seed, logs nothing", async () => {
+      vi.stubEnv("WAZE_SAVED_ADDRESSES", JSON.stringify({ casa: "Casa do Dono" }));
+      const fetchMock = redisDown();
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      useModel(navigateScript("casa"));
+      for (const driverId of [LEGACY_OWNER_DRIVER_ID, "drv_" + "B".repeat(22)]) {
+        const res = await wazeAgent.handle({ transcript: "me leva pra casa", contextId: "ctx", driverId });
+        expect(res).toMatchObject({ status: "failed", speech: "Não consegui acessar seus endereços agora.", clientActions: [] });
+        expect(JSON.stringify(res)).not.toMatch(/Casa do Dono|secret-detail/);
+      }
+      expect(fetchMock).toHaveBeenCalled();
+      expect(err).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("saving also fails short when Redis is down", async () => {
+      redisDown();
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      useModel(navigateScript("Rua Augusta, 123"));
+      const res = await wazeAgent.handle({
+        transcript: "Rua Augusta, 123",
+        contextId: "ctx",
+        driverId: "drv_" + "B".repeat(22),
+        continuation: { pendingLabel: "casa" },
+      });
+      expect(res).toMatchObject({ status: "failed", speech: "Não consegui acessar seus endereços agora.", clientActions: [] });
+      expect(err).not.toHaveBeenCalled();
+    });
+
+    it("an explicit destination still navigates when Redis is down or production has no KV variables (book is lazy)", async () => {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const fetchMock = redisDown();
+      useModel(navigateScript("Avenida Paulista, 1000"));
+      const down = await handle("me leva pra Avenida Paulista, 1000");
+      expect(down.status).toBe("completed");
+      expect(down.clientActions).toHaveLength(1);
+      vi.unstubAllGlobals();
+      const unused = vi.fn();
+      vi.stubGlobal("fetch", unused);
+      vi.stubEnv("VERCEL_ENV", "production");
+      vi.stubEnv("KV_REST_API_URL", "");
+      vi.stubEnv("KV_REST_API_TOKEN", "");
+      useModel(navigateScript("Avenida Paulista, 1000"));
+      const prod = await handle("me leva pra Avenida Paulista, 1000");
+      expect(prod.status).toBe("completed");
+      expect(prod.clientActions).toHaveLength(1);
+      expect(fetchMock).not.toHaveBeenCalled(); // not even touched
+      expect(unused).not.toHaveBeenCalled();
+      expect(err).not.toHaveBeenCalled();
+    });
+
+    it("production without Redis variables is a short failure too (fail closed, no memory)", async () => {
+      vi.stubEnv("VERCEL_ENV", "production");
+      vi.stubEnv("KV_REST_API_URL", "");
+      vi.stubEnv("KV_REST_API_TOKEN", "");
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      useModel(navigateScript("casa"));
+      const res = await wazeAgent.handle({ transcript: "me leva pra casa", contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
+      expect(res).toMatchObject({ status: "failed", speech: "Não consegui acessar seus endereços agora." });
+      expect(err).not.toHaveBeenCalled();
+    });
   });
 
   it("emits save_address clientAction when driverContext is provided", async () => {
@@ -232,6 +341,7 @@ describe("wazeAgent through the orchestrator", () => {
       transcript: "Rua Oscar Freire, 100",
       contextId: "ctx",
       continuation: { pendingLabel: "casa" },
+      driverId: LEGACY_OWNER_DRIVER_ID,
       driverContext: {},
     });
     expect(res.status).toBe("completed");

@@ -1,10 +1,13 @@
 import { getAgent } from "@/agents/registry";
 import { handleA2ARequest } from "@/lib/a2a-server";
-import { authorizeA2A } from "@/lib/auth";
+import { guardA2A } from "@/lib/auth";
 
-/** A2A task endpoint (JSON-RPC `message/send`). */
+/**
+ * A2A task endpoint (JSON-RPC `message/send`). Always runs as the OWNER (FINN_A2A_TOKEN is the owner's
+ * credential). Gate: failure rate limit in Redis, then the Bearer (guardA2A).
+ */
 export async function POST(request: Request, ctx: RouteContext<"/api/agents/[agent]">) {
-  const denied = authorizeA2A(request);
+  const denied = await guardA2A(request);
   if (denied) return denied;
 
   const { agent: id } = await ctx.params;

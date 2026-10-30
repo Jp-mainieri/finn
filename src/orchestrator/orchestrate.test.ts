@@ -1,3 +1,4 @@
+import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
 import { describe, expect, it, vi } from "vitest";
 import type { Agent, AgentId, AgentResult } from "@/lib/contracts/a2a";
 import { orchestrate } from "./orchestrate";
@@ -29,12 +30,12 @@ describe("orchestrate", () => {
     const transcript = "toca minha playlist e me leva pra casa";
 
     const started = Date.now();
-    const res = await orchestrate(transcript, { agents, contextId: "ctx" });
+    const res = await orchestrate(transcript, { agents, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
     const elapsed = Date.now() - started;
 
     expect(elapsed).toBeLessThan(180); // parallel, not 200ms sequential
     expect(agents.spotify.handle).toHaveBeenCalledWith(
-      expect.objectContaining({ transcript, contextId: "ctx" }),
+      expect.objectContaining({ transcript, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID }),
     );
     expect(agents.waze.handle).toHaveBeenCalledWith(expect.objectContaining({ transcript }));
     expect(res.speech).toBe("Tocando Rock Nacional. Abrindo a rota pra casa.");
@@ -44,7 +45,7 @@ describe("orchestrate", () => {
 
   it("only calls the matched agent", async () => {
     const agents = { spotify: fakeAgent("spotify", 0, { speech: "Pausado." }), waze: fakeAgent("waze", 0) };
-    const res = await orchestrate("pausa", { agents, contextId: "ctx" });
+    const res = await orchestrate("pausa", { agents, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
     expect(agents.waze.handle).not.toHaveBeenCalled();
     expect(res.speech).toBe("Pausado.");
   });
@@ -54,7 +55,7 @@ describe("orchestrate", () => {
       spotify: fakeAgent("spotify", 500, { speech: "tarde demais" }),
       waze: fakeAgent("waze", 0, { speech: "Indo pra casa." }),
     };
-    const res = await orchestrate("toca algo e me leva pra casa", { agents, contextId: "ctx", timeoutMs: 50 });
+    const res = await orchestrate("toca algo e me leva pra casa", { agents, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID, timeoutMs: 50 });
     expect(res.results[0]).toMatchObject({ agent: "spotify", status: "failed" });
     expect(res.speech).toBe("Não consegui mexer na música agora. Indo pra casa.");
   });
@@ -66,7 +67,7 @@ describe("orchestrate", () => {
     };
     const res = await orchestrate("Rua Augusta, 123", {
       agents,
-      contextId: "ctx",
+      contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID,
       continuation: { agent: "waze", state: { pendingLabel: "casa" } },
     });
     expect(agents.spotify.handle).not.toHaveBeenCalled();
@@ -80,7 +81,7 @@ describe("orchestrate", () => {
     const agents = { spotify: fakeAgent("spotify", 0, { speech: "Tocando rock." }), waze: fakeAgent("waze", 0) };
     const res = await orchestrate("toca rock", {
       agents,
-      contextId: "ctx",
+      contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID,
       continuation: { agent: "waze", state: { pendingLabel: "casa" } },
     });
     expect(agents.waze.handle).not.toHaveBeenCalled();
@@ -97,13 +98,13 @@ describe("orchestrate", () => {
         continuation: { pendingLabel: "casa" },
       }),
     };
-    const res = await orchestrate("me leva pra casa", { agents, contextId: "ctx" });
+    const res = await orchestrate("me leva pra casa", { agents, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
     expect(res.continuation).toEqual({ agent: "waze", state: { pendingLabel: "casa" } });
   });
 
   it("asks what to do when nothing matches", async () => {
     const agents = { spotify: fakeAgent("spotify", 0), waze: fakeAgent("waze", 0) };
-    const res = await orchestrate("que horas são?", { agents, contextId: "ctx" });
+    const res = await orchestrate("que horas são?", { agents, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
     expect(res.results).toEqual([]);
     expect(res.speech).toMatch(/música|lugar/);
   });
@@ -114,7 +115,7 @@ describe("orchestrate", () => {
       failureSpeech: "Custom Spotify failure speech.",
     };
     const agents = { spotify: customAgent, waze: fakeAgent("waze", 0) };
-    const res = await orchestrate("toca rock", { agents, contextId: "ctx", timeoutMs: 50 });
+    const res = await orchestrate("toca rock", { agents, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID, timeoutMs: 50 });
     expect(res.results[0]).toMatchObject({
       agent: "spotify",
       status: "failed",
@@ -128,7 +129,7 @@ describe("orchestrate", () => {
       waze: fakeAgent("waze", 0, { speech: "Indo." }),
     };
     const driverContext = { spotifyRefreshToken: "driver-token" };
-    await orchestrate("toca rock", { agents, contextId: "ctx", driverContext });
+    await orchestrate("toca rock", { agents, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID, driverContext });
     expect(agents.spotify.handle).toHaveBeenCalledWith(
       expect.objectContaining({ driverContext }),
     );

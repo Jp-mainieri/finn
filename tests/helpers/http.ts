@@ -17,7 +17,15 @@ export interface CallOptions {
   token?: string | null;
   /** Send this string verbatim instead of JSON-encoding `body`. */
   rawBody?: string;
+  /**
+   * Client IP (x-vercel-forwarded-for). `undefined` gives callA2A a fresh IP per call so the A2A failure
+   * rate limit (per IP, shared store) never couples unrelated tests; `null` sends no IP (the "noip" bucket).
+   */
+  ip?: string | null;
 }
+
+let ipSeq = 0;
+const freshIp = () => `198.51.${Math.floor(++ipSeq / 250) % 250}.${(ipSeq % 250) + 1}`;
 
 export interface HttpResult<T> {
   status: number;
@@ -29,6 +37,8 @@ function buildRequest(path: string, body: unknown, opts: CallOptions, defaultTok
   const headers: Record<string, string> = { "content-type": "application/json" };
   const token = opts.token === undefined ? defaultToken : opts.token;
   if (token !== null) headers.authorization = `Bearer ${token}`;
+  const ip = opts.ip === undefined ? (defaultToken === TEST_A2A_TOKEN ? freshIp() : null) : opts.ip;
+  if (ip) headers["x-vercel-forwarded-for"] = ip;
   return new Request(`${ORIGIN}${path}`, {
     method: "POST",
     headers,

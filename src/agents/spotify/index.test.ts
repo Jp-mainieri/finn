@@ -1,3 +1,4 @@
+import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, CompletionRequest } from "@/lib/contracts/neuralake";
 import { SPOTIFY_TOOLS } from "@/lib/contracts/tools";
@@ -44,7 +45,7 @@ function install(opts: FakeSpotifyOptions = {}) {
   return fake;
 }
 
-const run = (transcript: string) => spotifyAgent.handle({ transcript, contextId: "ctx" });
+const run = (transcript: string) => spotifyAgent.handle({ transcript, contextId: "ctx", driverId: LEGACY_OWNER_DRIVER_ID });
 
 function lastToolResult(req: CompletionRequest): unknown {
   const last = req.messages.at(-1);
@@ -227,6 +228,44 @@ describe("spotifyAgent", () => {
     const res = await run("volta a música");
     expect(res.toolCalls[0].result).toMatchObject({ ok: false });
     expect(fake.calls).toHaveLength(0);
+  });
+});
+
+describe("spotifyAgent wiring: the driverId given to the agent decides whose token is used", () => {
+  const B = "drv_" + "B".repeat(22);
+  const runAs = (driverId: string, transcript: string, driverContext?: { spotifyRefreshToken?: string }) =>
+    spotifyAgent.handle({ transcript, contextId: "ctx", driverId, driverContext });
+
+  it("non-owner without a Spotify token: 'Conecte seu Spotify', zero calls to Spotify", async () => {
+    const fake = install();
+    scripted(toolCallMessage("play_playlist", { playlist_name: "rock nacional" }), textMessage("Tocando."));
+    const res = await runAs(B, "toca rock nacional");
+    expect(res).toMatchObject({ agent: "spotify", status: "failed", speech: "Conecte seu Spotify." });
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("non-owner with a bad own token: the server refresh token never appears in any token request", async () => {
+    const fake = install({
+      override: (c) => (c.url === "https://accounts.spotify.com/api/token" ? Response.json({ error: "invalid_grant" }, { status: 400 }) : undefined),
+    });
+    scripted(toolCallMessage("play_playlist", { playlist_name: "rock nacional" }), textMessage("Tocando."));
+    const res = await runAs(B, "toca rock nacional", { spotifyRefreshToken: "b-bad-token" });
+    expect(res.status).toBe("failed");
+    const bodies = fake.find("POST", "https://accounts.spotify.com/api/token").map((c) => c.body ?? "");
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const b of bodies) {
+      expect(b).toContain("refresh_token=b-bad-token");
+      expect(b).not.toContain("refresh_token=refresh-token"); // value set by stubSpotifyEnv
+    }
+    expect(fake.find("PUT", `${API}/me/player/play`)).toEqual([]);
+  });
+
+  it("the owner still uses the server token", async () => {
+    const fake = install();
+    scripted(toolCallMessage("play_playlist", { playlist_name: "rock nacional" }), textMessage("Tocando."));
+    const res = await runAs(LEGACY_OWNER_DRIVER_ID, "toca rock nacional");
+    expect(res.status).toBe("completed");
+    expect(fake.find("POST", "https://accounts.spotify.com/api/token")[0].body).toContain("refresh_token=refresh-token");
   });
 });
 

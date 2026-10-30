@@ -3,6 +3,8 @@ import { UserFacingError } from "@/lib/agent-runtime";
 import { NO_DEVICE_SPEECH } from "./api";
 import { resetSpotifyTokenCache } from "./auth";
 import { controlPlayback, pickDevice, playContext, type SpotifyDevice } from "./player";
+import { LEGACY_OWNER_DRIVER_ID } from "@/lib/auth";
+const OWNER = { driverId: LEGACY_OWNER_DRIVER_ID };
 import { createFakeSpotify, json, spotifyError, stubSpotifyEnv, type RecordedCall } from "./testing";
 
 const device = (id: string, type: string, extra: Partial<SpotifyDevice> = {}): SpotifyDevice => ({
@@ -62,7 +64,7 @@ describe("no active device fallback", () => {
 
   it("plays the playlist on the phone when nothing is active", async () => {
     const fake = install([device("pc-1", "Computer"), device("phone-1", "Smartphone")]);
-    await playContext("spotify:playlist:abc");
+    await playContext("spotify:playlist:abc", OWNER);
     const plays = fake.find("PUT", "https://api.spotify.com/v1/me/player/play");
     expect(plays.map((c) => c.url)).toEqual([
       "https://api.spotify.com/v1/me/player/play",
@@ -73,23 +75,23 @@ describe("no active device fallback", () => {
 
   it("resumes on an available device", async () => {
     const fake = install([device("phone-1", "Smartphone")]);
-    await controlPlayback("play");
+    await controlPlayback("play", OWNER);
     expect(fake.find("PUT", "https://api.spotify.com/v1/me/player/play?device_id=phone-1")).toHaveLength(1);
   });
 
   it("keeps the friendly error when no device is available", async () => {
     install([]);
-    expect(await speechOf(playContext("spotify:playlist:abc"))).toBe(NO_DEVICE_SPEECH);
+    expect(await speechOf(playContext("spotify:playlist:abc", OWNER))).toBe(NO_DEVICE_SPEECH);
   });
 
   it("keeps the friendly error when the device lookup fails (e.g. missing scope)", async () => {
     install(spotifyError(403, "Insufficient client scope"));
-    expect(await speechOf(playContext("spotify:playlist:abc"))).toBe(NO_DEVICE_SPEECH);
+    expect(await speechOf(playContext("spotify:playlist:abc", OWNER))).toBe(NO_DEVICE_SPEECH);
   });
 
   it("does not look up devices for pause or skip", async () => {
     const fake = install([device("phone-1", "Smartphone")]);
-    expect(await speechOf(controlPlayback("pause"))).toBe(NO_DEVICE_SPEECH);
+    expect(await speechOf(controlPlayback("pause", OWNER))).toBe(NO_DEVICE_SPEECH);
     expect(fake.find("GET", "https://api.spotify.com/v1/me/player/devices")).toHaveLength(0);
   });
 });

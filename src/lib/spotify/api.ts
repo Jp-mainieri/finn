@@ -23,6 +23,8 @@ export interface SpotifyRequest {
   method?: "GET" | "PUT" | "POST";
   body?: unknown;
   signal?: AbortSignal;
+  /** Server-proven driver (never from the client). */
+  driverId: string;
   refreshToken?: string;
 }
 
@@ -66,17 +68,17 @@ function speechFor(err: SpotifyHttpError): string {
  */
 export async function spotifyRequest<T = unknown>(
   pathOrUrl: string,
-  req: SpotifyRequest = {},
+  req: SpotifyRequest,
 ): Promise<T | null> {
   const url = pathOrUrl.startsWith("https://") ? pathOrUrl : `${SPOTIFY_API_BASE}${pathOrUrl}`;
   let res: Response;
   try {
-    res = await send(url, await getAccessToken({ signal: req.signal, refreshToken: req.refreshToken }), req);
+    res = await send(url, await getAccessToken({ driverId: req.driverId, signal: req.signal, refreshToken: req.refreshToken }), req);
     if (res.status === 401) {
       await res.body?.cancel().catch(() => {});
       res = await send(
         url,
-        await getAccessToken({ forceRefresh: true, signal: req.signal, refreshToken: req.refreshToken }),
+        await getAccessToken({ driverId: req.driverId, forceRefresh: true, signal: req.signal, refreshToken: req.refreshToken }),
         req,
       );
     }

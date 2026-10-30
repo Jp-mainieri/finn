@@ -1,6 +1,6 @@
 # Finn — estado atual
 
-Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arquitetura: [`ARCHITECTURE.md`](./ARCHITECTURE.md). Plano: [`PERSONALIZATION_AND_LEARNING.md`](./PERSONALIZATION_AND_LEARNING.md).
+Atualizado em 2026-10-27. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arquitetura: [`ARCHITECTURE.md`](./ARCHITECTURE.md). Plano: [`PERSONALIZATION_AND_LEARNING.md`](./PERSONALIZATION_AND_LEARNING.md).
 
 ## Estado
 
@@ -12,7 +12,9 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 - `FINN_SESSION_SECRET` e `FINN_INVITE_PEPPER` configurados na Vercel pelo orquestrador (autorização do dono, 2026-10-26): 6 valores distintos (um par por ambiente), gerados com `openssl rand -hex 32` e enviados por pipe sem exibição. Production e Preview são `Sensitive`; Development não pode ser (limite da Vercel) e fica legível por `vercel env pull` para quem tem acesso ao projeto.
 - Etapa 1, entrega 1 (núcleo `src/lib/driver/`): implementada e corrigida após qa e security-review, em `feat/driver-store-core` (local, sem PR ainda). Relatórios: [`relatorios/driver-store-core-2026-10-26.md`](./relatorios/driver-store-core-2026-10-26.md), [`revisoes/driver-store-core-security-review.md`](./revisoes/driver-store-core-security-review.md), [`relatorios/orquestrador-2026-10-26.md`](./relatorios/orquestrador-2026-10-26.md). Rodada 3 (pepper do convite e `rotateSessions`) concluída: 442 testes passam, typecheck e lint limpos. Falta: push e PR (aguarda OK do dono), depois entrega 2.
 - Entrega 2 (rotas de sessão, `authorizeDriver`, scripts do dono, smoke) implementada em `feat/driver-session-routes` (local): 533 testes, build ok; qa e security-review concluídos e correções aplicadas; falta push e PR (aguarda OK), mais as decisões A2, A1, B4 e A3 do dono. Relatório: [`relatorios/driver-session-routes-2026-10-26.md`](./relatorios/driver-session-routes-2026-10-26.md).
-- PRs (todos abertos, sem merge, empilhados): #1 adoção do padrão; #2 contrato e núcleo (entrega 1); #3 rotas de sessão e scripts (entrega 2). Ordem de merge: #1, #2, #3.
+- PRs (todos abertos, sem merge, empilhados): #1 adoção do padrão; #2 contrato e núcleo (entrega 1); #3 rotas de sessão e scripts (entrega 2); #4 A2A com segredo próprio. Ordem de merge: #1, #2, #3, #4.
+- Entrega 3 (isolamento por motorista, contrato aprovado em 2026-10-27: [`contratos/isolamento-por-motorista.md`](./contratos/isolamento-por-motorista.md)) implementada em `feat/driver-isolation` (local, sem push): 700 testes passam, 4 ignorados, typecheck, lint e build limpos (verificado pelo orquestrador). qa e security-review concluídos (0 crítico, 0 alto) e correções da rodada 2 aplicadas. C1 fechado no código; M1 do A2A atendido (6 pontos). Relatório: [`relatorios/driver-isolation-2026-10-27.md`](./relatorios/driver-isolation-2026-10-27.md); revisões em `revisoes/driver-isolation-*.md`. Falta push e PR #5 (aguarda OK).
+- **Convites em produção continuam bloqueados até a entrega 4** (sec M1 da entrega 3: o Spotify de um convidado vem de corpo ou cookie sem vínculo com o `driverId`; callback do Spotify manda o refresh token na query string).
 
 ## Decisões fechadas
 
@@ -52,7 +54,7 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 
 ## Débitos
 
-1. Perfis misturados: `LayeredAddressBook` grava também no `baseBook` global (vazamento entre motoristas). Etapa 1, entrega 2.
+1. ~~Perfis misturados (`LayeredAddressBook` gravava no livro global)~~ resolvido na entrega 3 (`feat/driver-isolation`).
 2. Refresh token do Spotify trafega do aparelho no `driverContext`. Etapa 1, entrega 3.
 3. Token único compartilhado `FINN_API_TOKEN`. Etapa 1 (identidade).
 4. Sem rate limit por motorista nem métricas de latência/fallback. Antes do beta.
@@ -68,6 +70,7 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 15. Resgate de convite não é idempotente com resposta perdida (qa N4, security B4): retry cria motorista órfão ou 401. Decisão de produto pendente.
 17. `extractBearer` rejeita o esquema `bearer` em minúsculo (RFC 7235 diz que não diferencia maiúsculas); comportamento anterior, afeta orchestrator e A2A. Baixa prioridade, decidir antes de haver clientes externos.
 16. Sem limite por motorista nas rotas que chamam IA (M3). `src/lib/spotify/auth.ts:129` faz `console.warn(..., err)` (pré-existente): conferir se `err` pode conter dado sensível.
+18. Débitos da entrega 3 (qa/security-review, aceitos): limitador do A2A não atômico (rajada passa; segredo certo também leva 429 com IP estourado); `Retry-After` fixo em 600; balde `noip` compartilhado fora da Vercel; Redis lento pode somar ~6 s contra o orçamento de 8 s; `revokeDriver` não apaga `driver-addr:*` (falta purga); cliente A2A externo não continua o "waze pergunta o endereço" (artifact sem `continuation`); regra de ambiente relaxado em `src/lib/driver/index.ts` mais frouxa que a de produção; `memoryScope: finn-<agente>` global (vazamento se o TODO `neuralake-memory` for ligado); objetos de erro inteiros em logs pré-existentes (`orchestrate.ts`, `agent-runtime.ts`, `neuralake/client.ts`); ramos `!VITEST` de `runToolLoop` sem teste; `isWellFormed` exige Node 20+ (conferir o runtime).
 12. Singleton do `MemoryDriverStore` em dev com bundles separados do Next (hipótese do qa), e build do cliente se o PWA importar o barrel `src/lib/driver` (importa `node:crypto`): não importar do PWA.
 
 ## Pré-lançamento (antes de abrir a usuários reais)

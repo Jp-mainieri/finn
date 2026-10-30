@@ -32,6 +32,8 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 
 - 2026-10-27 (A2, security-review da entrega 2): o A2A (`/api/agents/*`) passa a exigir segredo próprio `FINN_A2A_TOKEN`; sem a variável o endpoint fica desligado (falha fechada) e o `FINN_API_TOKEN` deixa de abri-lo. Recomendação do orquestrador aceita pelo dono. Variável NÃO criada ainda (ninguém usa o A2A); criar quando houver cliente. Reabre se algum cliente externo precisar do A2A.
 
+- **REGRA DE PROCESSO (security-review do A2A, M1, 2026-10-27): NÃO criar `FINN_A2A_TOKEN` na Vercel antes da entrega 3 resolver:** de quem são os recursos que o A2A usa (dono explícito, ou `driverId` provado no servidor), livro de endereços não global, limite de taxa em Redis ou Firewall (não em memória), rotação e revogação do segredo, validação ou assinatura da `continuation` (vem do cliente sem validação) e revisão do artifact `result`. Enquanto a variável não existir, o A2A fica desligado (503).
+
 ## Decisões provisórias
 
 - **Redis único (D1, 2026-10-26):** o dono escolheu primeiro separar o banco de produção (opção b), mas o plano Free do Upstash permite **1 banco por conta** e um segundo exigiria Pay as You Go. O dono não quer gastar nada por enquanto, então ficou **um banco para os 3 ambientes**, separados só pelo prefixo `finn:<env>:`.
@@ -61,9 +63,10 @@ Atualizado em 2026-10-26. Processo: [`ORQUESTRACAO.md`](./ORQUESTRACAO.md). Arqu
 9. `@upstash/redis` fixado em 1.40.0 sem `npm audit` nem checagem de procedência. Fazer antes do beta.
 10. Rotas devem tratar `DriverStoreUnavailableError` como negação com erro falável e sem logar o erro (entrega 2).
 11. Limite global de resgate de convite não existe (só por IP); tokens de 90 dias sem vínculo de ambiente (B3, em fila).
-13. ~~`/api/agents/*` aceita `FINN_API_TOKEN`~~ resolvido pela decisão A2 de 2026-10-27 (branch `feat/a2a-own-token`, em implementação).
+13. ~~`/api/agents/*` aceita `FINN_API_TOKEN`~~ resolvido pela decisão A2 de 2026-10-27 (branch `feat/a2a-own-token`): implementado; qa e security-review concluídos; correções aplicadas (558 testes); aguardando push e PR #4 (autorização do dono).
 14. Todo POST em `/api/session` gasta ao menos 1 comando Redis mesmo após rate limit e não há limite global: risco de esgotar a cota do plano Free sem autenticação (A3). Falta regra de rate limit no firewall da Vercel e alerta de uso no Upstash (ação do dono).
 15. Resgate de convite não é idempotente com resposta perdida (qa N4, security B4): retry cria motorista órfão ou 401. Decisão de produto pendente.
+17. `extractBearer` rejeita o esquema `bearer` em minúsculo (RFC 7235 diz que não diferencia maiúsculas); comportamento anterior, afeta orchestrator e A2A. Baixa prioridade, decidir antes de haver clientes externos.
 16. Sem limite por motorista nas rotas que chamam IA (M3). `src/lib/spotify/auth.ts:129` faz `console.warn(..., err)` (pré-existente): conferir se `err` pode conter dado sensível.
 12. Singleton do `MemoryDriverStore` em dev com bundles separados do Next (hipótese do qa), e build do cliente se o PWA importar o barrel `src/lib/driver` (importa `node:crypto`): não importar do PWA.
 

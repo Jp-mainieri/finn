@@ -11,7 +11,7 @@
  *   }));
  */
 import { afterEach, beforeEach, vi } from "vitest";
-import { TEST_TOKEN } from "./http";
+import { TEST_A2A_TOKEN, TEST_TOKEN } from "./http";
 import { llm } from "./llm";
 import { resetAddressBook, resetSpotifyTokenCache } from "./modules";
 import { installFakeSpotify, type FakeSpotify, type FakeSpotifyCredentials } from "./spotify-fake";
@@ -25,6 +25,7 @@ export const SPOTIFY_CREDS: FakeSpotifyCredentials = {
 
 export function stubBaseEnv(extra: Record<string, string | undefined> = {}): void {
   vi.stubEnv("FINN_API_TOKEN", TEST_TOKEN);
+  vi.stubEnv("FINN_A2A_TOKEN", TEST_A2A_TOKEN);
   vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", "1"); // /api/orchestrator uses authorizeDriver; the shared token is legacy
   vi.stubEnv("FINN_USE_MOCKS", "1");
   vi.stubEnv("SPOTIFY_CLIENT_ID", SPOTIFY_CREDS.clientId);

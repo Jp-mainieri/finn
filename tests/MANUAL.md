@@ -9,7 +9,7 @@ Mark each item ✅ / ❌ / ⚠️ and add a note for anything that isn't ✅.
 
 ## 0. Before you drive (parked)
 
-- [ ] `npm run test:smoke` against the same URL passes with `FINN_API_TOKEN` set.
+- [ ] `npm run test:smoke` against the same URL passes with `FINN_API_TOKEN` set. The authenticated A2A check runs only if `FINN_A2A_TOKEN` is also set (64 hex, different from `FINN_API_TOKEN`); without it the smoke skips that check with a warning, and a 503 from `/api/agents/*` means A2A is off.
 - [ ] Spotify: account is Premium, the app is logged in, and something played on the phone at least once today.
 - [ ] Waze installed and logged in; location permission set to "While Using".
 - [ ] Phone: Low Power Mode **off** (it throttles mic/background audio), volume up, Silent switch noted (see 4.4).

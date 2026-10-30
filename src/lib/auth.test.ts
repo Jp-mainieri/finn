@@ -1,27 +1,92 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { authorize } from "./auth";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { authorizeA2A, resetA2ADisabledLogForTests } from "./auth";
 
 const req = (auth?: string) =>
   new Request("http://x/api/orchestrator", { headers: auth ? { authorization: auth } : {} });
 
-describe("authorize", () => {
-  afterEach(() => vi.unstubAllEnvs());
+describe("authorizeA2A", () => {
+  beforeEach(() => resetA2ADisabledLogForTests());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+  const A2A = "9c1e47d2b86a30f5e7d4c2a91b68f03e5d7a24c9e1b0836f4a5d2c7e91f0b3a8";
+  const API = "x-api-token-0123456789abcdefghijklmnopqrstuv";
 
-  it("fails closed when FINN_API_TOKEN is unset", () => {
-    vi.stubEnv("FINN_API_TOKEN", "");
-    expect(authorize(req("Bearer anything"))?.status).toBe(503);
+  it.each([
+    ["unset", undefined],
+    ["empty", ""],
+    ["spaces", "   "],
+    ["31 chars", A2A.slice(0, 31)],
+    ["32 chars", A2A.slice(0, 32)],
+    ["63 chars", A2A.slice(0, 63)],
+    ["65 chars", `${A2A}a`],
+    ["non-hex", `${A2A.slice(0, 63)}g`],
+    ["few distinct", "ab".repeat(32)],
+    ["7 distinct", "0123456".repeat(10).slice(0, 64)],
+    ["inner space", `${A2A.slice(0, 20)} ${A2A.slice(21)}`],
+  ])("is off (503) when FINN_A2A_TOKEN is %s, even with that value as bearer", async (_l, value) => {
+    vi.stubEnv("FINN_A2A_TOKEN", value);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = authorizeA2A(req(`Bearer ${value ?? "x"}`))!;
+    expect(res.status).toBe(503);
+    expect(JSON.stringify(await res.json())).not.toContain(String(value || "\u0000"));
   });
 
-  it("rejects missing or wrong tokens", () => {
-    vi.stubEnv("FINN_API_TOKEN", "s3cret");
-    expect(authorize(req())?.status).toBe(401);
-    expect(authorize(req("Bearer nope"))?.status).toBe(401);
-    expect(authorize(req("s3cret"))?.status).toBe(401);
+  it("accepts exactly 64 hex with >= 8 distinct chars, upper or lower case (same rule as FINN_SESSION_SECRET)", () => {
+    for (const v of [A2A, A2A.toUpperCase(), "01234567".repeat(8)]) {
+      vi.stubEnv("FINN_A2A_TOKEN", v);
+      expect(authorizeA2A(req(`Bearer ${v}`))).toBeNull();
+    }
+  });
+
+  it("rejects missing or wrong tokens with 401 + WWW-Authenticate", () => {
+    vi.stubEnv("FINN_A2A_TOKEN", A2A);
+    for (const h of [undefined, "Bearer nope", `Bearer ${A2A}x`, `Bearer ${A2A.slice(0, -1)}`, A2A, "Bearer "]) {
+      const res = authorizeA2A(req(h))!;
+      expect(res.status).toBe(401);
+      expect(res.headers.get("www-authenticate")).toBe("Bearer");
+    }
   });
 
   it("accepts the right bearer token", () => {
-    vi.stubEnv("FINN_API_TOKEN", "s3cret");
-    expect(authorize(req("Bearer s3cret"))).toBeNull();
+    vi.stubEnv("FINN_A2A_TOKEN", A2A);
+    expect(authorizeA2A(req(`Bearer ${A2A}`))).toBeNull();
+  });
+
+  it("FINN_API_TOKEN never opens it, even with the legacy flag on", () => {
+    vi.stubEnv("FINN_A2A_TOKEN", A2A);
+    vi.stubEnv("FINN_API_TOKEN", API);
+    vi.stubEnv("FINN_LEGACY_TOKEN_ENABLED", "1");
+    expect(authorizeA2A(req(`Bearer ${API}`))?.status).toBe(401);
+    vi.stubEnv("FINN_A2A_TOKEN", "");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(authorizeA2A(req(`Bearer ${API}`))?.status).toBe(503);
+  });
+
+  it("is off (503) when FINN_A2A_TOKEN equals FINN_API_TOKEN (also modulo whitespace); different values keep working", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("FINN_A2A_TOKEN", A2A);
+    vi.stubEnv("FINN_API_TOKEN", ` ${A2A} `);
+    expect(authorizeA2A(req(`Bearer ${A2A}`))?.status).toBe(503);
+    vi.stubEnv("FINN_API_TOKEN", API);
+    expect(authorizeA2A(req(`Bearer ${A2A}`))).toBeNull();
+  });
+
+  it("logs one value-free line per process when disabled", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("FINN_API_TOKEN", API);
+    vi.stubEnv("FINN_A2A_TOKEN", "short-secret-value");
+    authorizeA2A(req("Bearer short-secret-value"));
+    vi.stubEnv("FINN_A2A_TOKEN", API);
+    authorizeA2A(req(`Bearer ${API}`));
+    vi.stubEnv("FINN_A2A_TOKEN", A2A);
+    vi.stubEnv("FINN_API_TOKEN", A2A);
+    authorizeA2A(req(`Bearer ${A2A}`));
+    expect(spy).toHaveBeenCalledTimes(1);
+    const line = JSON.stringify(spy.mock.calls);
+    for (const v of ["short-secret-value", API, A2A]) expect(line).not.toContain(v);
+    expect(line).toContain("FINN_A2A_TOKEN missing or invalid");
   });
 });
 
@@ -178,11 +243,11 @@ describe("authorizeDriver", () => {
     });
   });
 
-  it("/api/agents/* still uses only authorize() (not authorizeDriver)", () => {
+  it("/api/agents/* uses only authorizeA2A() (not authorizeDriver)", () => {
     for (const f of ["src/app/api/agents/[agent]/route.ts", "src/app/api/agents/[agent]/card/route.ts"]) {
       const src = readFileSync(f, "utf8");
       expect(src).not.toContain("authorizeDriver");
     }
-    expect(readFileSync("src/app/api/agents/[agent]/route.ts", "utf8")).toMatch(/\bauthorize\(request\)/);
+    expect(readFileSync("src/app/api/agents/[agent]/route.ts", "utf8")).toMatch(/\bauthorizeA2A\(request\)/);
   });
 });

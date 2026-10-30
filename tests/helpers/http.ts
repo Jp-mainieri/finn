@@ -10,9 +10,10 @@ import type { OrchestratorResponse } from "@/lib/contracts/client-events";
 
 export const ORIGIN = "https://finn.test";
 export const TEST_TOKEN = "test-finn-token-0123456789";
+export const TEST_A2A_TOKEN = "9c1e47d2b86a30f5e7d4c2a91b68f03e5d7a24c9e1b0836f4a5d2c7e91f0b3a8";
 
 export interface CallOptions {
-  /** Bearer token; `null` sends no Authorization header. Defaults to TEST_TOKEN. */
+  /** Bearer token; `null` sends no Authorization header. Defaults to TEST_TOKEN (TEST_A2A_TOKEN for callA2A). */
   token?: string | null;
   /** Send this string verbatim instead of JSON-encoding `body`. */
   rawBody?: string;
@@ -24,9 +25,9 @@ export interface HttpResult<T> {
   json: T;
 }
 
-function buildRequest(path: string, body: unknown, opts: CallOptions): Request {
+function buildRequest(path: string, body: unknown, opts: CallOptions, defaultToken: string = TEST_TOKEN): Request {
   const headers: Record<string, string> = { "content-type": "application/json" };
-  const token = opts.token === undefined ? TEST_TOKEN : opts.token;
+  const token = opts.token === undefined ? defaultToken : opts.token;
   if (token !== null) headers.authorization = `Bearer ${token}`;
   return new Request(`${ORIGIN}${path}`, {
     method: "POST",
@@ -71,7 +72,7 @@ export async function callA2A(
   opts: CallOptions = {},
 ): Promise<HttpResult<A2AResponse>> {
   return unwrap(
-    await agentPOST(buildRequest(`/api/agents/${agent}`, body, opts), {
+    await agentPOST(buildRequest(`/api/agents/${agent}`, body, opts, TEST_A2A_TOKEN), {
       params: Promise.resolve({ agent }),
     }),
   );

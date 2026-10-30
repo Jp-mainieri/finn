@@ -6,12 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DriverStoreUnavailableError, MemoryDriverStore, setDriverStoreForTests, signSessionToken, type DriverStore } from "@/lib/driver";
 import { getAccessToken, resetSpotifyTokenCache } from "@/lib/spotify/auth";
 import { createFakeSpotify, json, loggedText, OTHER_TEST_KEY, TEST_ENC_KEY, TOKEN_URL } from "@/lib/spotify/testing";
+import { expireLegacyRefreshCookie } from "@/lib/spotify/oauth";
 import { loadSpotifyRefreshToken } from "@/lib/spotify/token-vault";
 import { GET as callbackGET } from "./callback/route";
 import { POST as connectPOST } from "./connect/route";
 import { DELETE as connectionDELETE, GET as connectionGET } from "./connection/route";
 import { GET as loginGET } from "./login/route";
-import "../../../../tests/helpers/owner";
+import { registerTestOwner, TEST_OWNER_ID } from "../../../../tests/helpers/owner";
 
 const SESSION_SECRET = "3f9a1c7e5b2d48806ae1f4c93d7b05e2a8c61f9d04b37e5a2c8d1f6039ab74ce";
 const RT = "RT-SENTINEL-do-not-leak-0123456789";
@@ -339,6 +340,54 @@ describe("GET/DELETE /api/spotify/connection", () => {
   it("401 without a session", async () => {
     expect((await status()).status).toBe(401);
     expect((await disconnect()).status).toBe(401);
+  });
+
+  it("success answers of GET and DELETE expire the legacy refresh cookie (no value); 401 and 503 do not", async () => {
+    const a = await newDriver("A");
+    for (const res of [await status(a.token), await disconnect(a.token)]) {
+      expect(res.status).toBe(200);
+      const cookie = res.headers.get("set-cookie") ?? "";
+      expect(cookie).toBe("finn_spotify_rt=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
+      expect(cookie.split(";")[0]).toBe("finn_spotify_rt=");
+    }
+    expect((await status()).headers.get("set-cookie")).toBeNull();
+    expect((await disconnect()).headers.get("set-cookie")).toBeNull();
+    vi.stubEnv("FINN_TOKEN_ENC_KEY", "");
+    const down = await status(a.token);
+    expect(down.status).toBe(503);
+    expect(down.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("the owner path (GET and DELETE) also expires the legacy cookie", async () => {
+    registerTestOwner(store);
+    const owner = signSessionToken({ driverId: TEST_OWNER_ID, tokenVersion: 1 }, SESSION_SECRET);
+    for (const res of [await status(owner), await disconnect(owner)]) {
+      expect(res.status).toBe(200);
+      expect(res.headers.get("set-cookie")).toBe("finn_spotify_rt=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
+    }
+  });
+
+  it("a request carrying a finn_spotify_rt value never gets it back in body, headers or console", async () => {
+    const SENTINEL = "SENTINEL-rt-9f3a7c1e";
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((m) => vi.spyOn(console, m));
+    const a = await newDriver("A");
+    const cookie = { cookie: `finn_spotify_rt=${SENTINEL}` };
+    const reqs = [
+      connectionGET(new Request("https://finn.test/api/spotify/connection", { headers: { ...auth(a.token), ...cookie } })),
+      connectionDELETE(new Request("https://finn.test/api/spotify/connection", { method: "DELETE", headers: { ...auth(a.token), ...cookie } })),
+    ];
+    for (const res of await Promise.all(reqs)) {
+      expect(await res.text()).not.toContain(SENTINEL);
+      expect(JSON.stringify([...res.headers.entries()])).not.toContain(SENTINEL);
+    }
+    expect(JSON.stringify(spies.map((s) => s.mock.calls))).not.toContain(SENTINEL);
+  });
+
+  it("the expiry cookie drops Secure only in local development", () => {
+    expect(expireLegacyRefreshCookie({ NODE_ENV: "development" })).toBe("finn_spotify_rt=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
+    expect(expireLegacyRefreshCookie({ NODE_ENV: "production" })).toContain("Secure");
+    expect(expireLegacyRefreshCookie({ NODE_ENV: "development", VERCEL_ENV: "preview" })).toContain("Secure");
+    expect(expireLegacyRefreshCookie({})).toContain("Secure");
   });
 
   it("reports connected only after the flow, per driver; only a boolean in the body", async () => {

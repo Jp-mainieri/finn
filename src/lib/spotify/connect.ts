@@ -11,7 +11,7 @@
 import { authorizeDriver, isOwner } from "@/lib/auth";
 import { getDriverStore, type DriverStore } from "@/lib/driver";
 import { evictSpotifyAccessToken, exchangeAuthorizationCode, getOwnerSpotifyUserId } from "./auth";
-import { buildAuthorizeUrl, escapeHtml, htmlPage, isDevelopmentFlow, OAUTH_STATE_COOKIE, redirectUriFor } from "./oauth";
+import { buildAuthorizeUrl, escapeHtml, expireLegacyRefreshCookie, htmlPage, isDevelopmentFlow, OAUTH_STATE_COOKIE, redirectUriFor } from "./oauth";
 import { fetchSpotifyProfile } from "./profile";
 import { deleteSpotifyRefreshToken, isTokenVaultEnabled, loadSpotifyRefreshToken, saveSpotifyRefreshToken } from "./token-vault";
 
@@ -25,6 +25,9 @@ export const CONNECT_RATE_LIMIT = { max: 10, windowSeconds: 600 } as const;
 const MAX_CODE_LENGTH = 2048;
 
 const noStore = { "Cache-Control": "no-store" };
+/** Authenticated success answers of /connection also expire the legacy refresh-token cookie (never read here). */
+const connectionOk = (body: { connected: boolean }, env: Env) =>
+  Response.json(body, { headers: { ...noStore, "Set-Cookie": expireLegacyRefreshCookie(env) } });
 const unavailable = () => Response.json({ error: "Spotify connection unavailable" }, { status: 503, headers: noStore });
 
 /** POST /api/spotify/connect */
@@ -175,11 +178,11 @@ export async function handleConnectionStatus(request: Request, deps: ConnectDeps
   const auth = await authorizeDriver(request, deps.store ? { store: deps.store } : {});
   if (auth instanceof Response) return auth;
   // The owner is "connected" through the server token; the vault (and its key) are not involved.
-  if (isOwner(auth.driverId, deps.env ?? process.env)) return Response.json({ connected: ownerConnected(deps.env ?? process.env) }, { headers: noStore });
+  if (isOwner(auth.driverId, deps.env ?? process.env)) return connectionOk({ connected: ownerConnected(deps.env ?? process.env) }, deps.env ?? process.env);
   try {
     // A blob that does not decrypt reads as null: not connected.
     const token = await loadSpotifyRefreshToken(auth.driverId, deps);
-    return Response.json({ connected: token !== null }, { headers: noStore });
+    return connectionOk({ connected: token !== null }, deps.env ?? process.env);
   } catch {
     return unavailable(); // vault off or Redis down
   }
@@ -196,8 +199,8 @@ export async function handleDisconnect(request: Request, deps: ConnectDeps = {})
   }
   if (isOwner(auth.driverId, deps.env ?? process.env)) {
     // Only clears a residual blob; the server token stays, so the answer is the same as GET's.
-    return Response.json({ connected: ownerConnected(deps.env ?? process.env) }, { headers: noStore });
+    return connectionOk({ connected: ownerConnected(deps.env ?? process.env) }, deps.env ?? process.env);
   }
   evictSpotifyAccessToken(auth.driverId);
-  return Response.json({ connected: false }, { headers: noStore });
+  return connectionOk({ connected: false }, deps.env ?? process.env);
 }

@@ -57,6 +57,29 @@ Projeto 100% meu: arquitetura, código, testes e documentação. O desenvolvimen
 - Convites para outras pessoas ainda **não** estão liberados em produção. O histórico de decisões fica em [`docs/ESTADO_ATUAL.md`](docs/ESTADO_ATUAL.md).
 - Persistência durável do perfil do motorista ainda não está em `main`.
 
+## Próximos passos
+
+Conforme [`docs/ESTADO_ATUAL.md`](docs/ESTADO_ATUAL.md) (atualizado em 28/10/2026):
+
+**Evolução do produto**, nesta ordem:
+
+1. Redis, perfil do motorista (`DriverProfile`) e identidade, com isolamento por motorista e custódia do token do Spotify. É a etapa em andamento, em entregas pequenas com revisão de qualidade e de segurança.
+2. Memória curta da viagem.
+3. Lugares dinâmicos e aliases.
+4. Modo Rotina.
+
+A arquitetura de personalização e memória de baixa latência está em [`docs/PERSONALIZATION_AND_LEARNING.md`](docs/PERSONALIZATION_AND_LEARNING.md).
+
+**Antes de abrir o beta para outras pessoas:**
+
+- concluir e revisar a etapa 1 (qa e security-review);
+- rate limit por motorista nas rotas de IA e métricas de latência e de fallback;
+- restringir a chave pública da Picovoice no painel dela;
+- rodar o checklist manual (`tests/MANUAL.md`) na build de produção;
+- avaliar a extensão de cota do Spotify se passar de 25 usuários.
+
+**Débitos conhecidos:** dependência da Neuralake (respostas 429 frequentes, mascaradas pelo fallback para o Groq, então é preciso acompanhar a taxa de fallback) e a memória por agente da Neuralake, que não é documentada pelo provedor.
+
 ## Como rodar localmente
 
 Requisitos: Node.js e npm.

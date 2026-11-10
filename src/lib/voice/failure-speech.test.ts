@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { LOCAL_SPEECH, classifyServerFailure } from "./failure-speech";
+import { LOCAL_SPEECH, SPEECH_FAILURE_LINES, classifyServerFailure, isOffline } from "./failure-speech";
+
+describe("speech failure lines", () => {
+  it("keeps the fixed lines and classifies offline errors", () => {
+    expect(SPEECH_FAILURE_LINES.not_heard).toBe("Não consegui te ouvir, tente de novo.");
+    expect(SPEECH_FAILURE_LINES.offline).toBe("Sem internet.");
+    expect(isOffline(new TypeError("Load failed"))).toBe(true);
+    expect(isOffline(new Error("boom"))).toBe(false);
+  });
+});
 
 const res = (status: number, body?: BodyInit | null) => new Response(body ?? null, { status });
 const withScope = (scope: unknown, status = 429) => res(status, JSON.stringify({ error: "Too many requests", scope }));

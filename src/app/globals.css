@@ -86,3 +86,23 @@ a {
   from { transform: scaleY(0.3); }
   to { transform: scaleY(1); }
 }
+
+/* Reduced motion: the status title already says the state, so decorative motion goes away. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
+  .animate-in,
+  .finn-eq span {
+    animation: none !important;
+  }
+  .finn-eq span {
+    transform: scaleY(0.6);
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

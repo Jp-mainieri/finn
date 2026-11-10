@@ -12,7 +12,7 @@ export const GEMINI_TIMEOUT_MS = 8000;
 /** Teto do audio decodificado (resposta da Vercel limitada a 4,5 MB). */
 export const GEMINI_MAX_AUDIO_BYTES = 4_000_000;
 /** Acima disso vai direto ao OpenAI: ~13 caracteres/s de audio, geracao quase em tempo real. */
-export const GEMINI_MAX_TEXT_CHARS = 600;
+export const GEMINI_MAX_TEXT_CHARS = 120;
 
 export type TtsProvider = "openai" | "gemini";
 

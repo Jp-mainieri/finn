@@ -42,7 +42,7 @@ function DriverSettingsDialog({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Configurações do Motorista"
+      aria-label="Configurações do motorista"
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-scrim p-0 sm:p-4"
     >
       <div className="flex max-h-[90dvh] w-full max-w-lg flex-col rounded-t-3xl sm:rounded-3xl border border-border bg-surface overflow-hidden animate-in fade-in duration-200">
@@ -65,14 +65,14 @@ function DriverSettingsDialog({
                 <svg viewBox="0 0 20 20" aria-hidden="true" className="h-5 w-5 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M4 10.5l4 4 8-9" />
                 </svg>
-                Configurações salvas no aparelho!
+                Configurações salvas
               </span>
             </div>
           )}
 
           {/* Voz do Assistente */}
           <section className="space-y-3">
-            <h3 className="text-base font-semibold text-foreground">Voz do Assistente</h3>
+            <h3 className="text-base font-semibold text-foreground">Voz do assistente</h3>
             <div className="grid grid-cols-1 gap-2">
               <label
                 className={`flex cursor-pointer flex-col rounded-2xl border p-4 transition-colors ${
@@ -82,7 +82,7 @@ function DriverSettingsDialog({
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-foreground">Rápida e Gratuita</span>
+                  <span className="font-semibold text-foreground">Rápida e gratuita</span>
                   <input
                     type="radio"
                     name="ttsMode"
@@ -124,10 +124,10 @@ function DriverSettingsDialog({
 
           {/* Motor de Sessão */}
           <section className="space-y-2">
-            <span className="block text-sm font-semibold text-foreground">Motor de Voz</span>
+            <span className="block text-sm font-semibold text-foreground">Motor de voz</span>
             <div className="space-y-2">
               <div className="flex items-center justify-between rounded-2xl border border-accent-ink bg-accent/10 px-4 py-3">
-                <span className="text-base font-medium text-foreground">Whisper STT + TTS (Ativo)</span>
+                <span className="text-base font-medium text-foreground">Whisper STT + TTS</span>
                 <span className="rounded-full bg-accent/20 px-2.5 py-0.5 text-xs font-semibold text-accent-ink">
                   Padrão
                 </span>
@@ -138,7 +138,7 @@ function DriverSettingsDialog({
               >
                 <span className="text-base text-muted">GPT-Live-1 (WebRTC Full-Duplex)</span>
                 <span className="rounded-full border border-border bg-surface px-2.5 py-0.5 text-xs font-semibold text-muted">
-                  EM BREVE
+                  Em breve
                 </span>
               </div>
             </div>
@@ -223,7 +223,7 @@ function DriverSettingsDialog({
               type="submit"
               className="min-h-16 w-full rounded-3xl bg-accent text-xl font-semibold text-on-accent transition-transform active:scale-[0.98]"
             >
-              Salvar Alterações
+              Salvar alterações
             </button>
           </footer>
         </form>

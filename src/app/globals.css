@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 /*
- * Palette derived from the logo blue (#1F5FCC). Dark is the default (the app is used in a
- * car, often at night); light follows the system for daytime. Text on --accent is white
+ * Palette derived from the logo blue (#1F5FCC). Dark only: the app is used in a car, often at
+ * night. Text on --accent is white
  * (6.1:1); accent used as text/border on a surface uses --accent-ink (AA or better).
  */
 :root {
@@ -18,21 +18,6 @@
   --danger: #ff8a80;
   --scrim: rgb(5 8 14 / 0.72);
   color-scheme: dark;
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    --background: #f5f7fb;
-    --foreground: #0a0f1a;
-    --surface: #ffffff;
-    --border: #cfd7e5;
-    --muted: #4b576b;
-    --accent-ink: #1a4fb0;
-    --warn: #8a5a00;
-    --danger: #b42318;
-    --scrim: rgb(10 15 26 / 0.5);
-    color-scheme: light;
-  }
 }
 
 @theme inline {

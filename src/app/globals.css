@@ -1,16 +1,38 @@
 @import "tailwindcss";
 
-/* Dark only: the app is used in a car, often at night. */
+/*
+ * Palette derived from the logo blue (#1F5FCC). Dark is the default (the app is used in a
+ * car, often at night); light follows the system for daytime. Text on --accent is white
+ * (6.1:1); accent used as text/border on a surface uses --accent-ink (AA or better).
+ */
 :root {
-  --background: #07090d;
-  --foreground: #f3f5f7;
-  --surface: #121720;
-  --border: #2a3140;
-  --muted: #9aa4b2;
-  --accent: #3ee0a0;
-  --warn: #ffc857;
-  --danger: #ff6b6b;
+  --background: #0a0f1a;
+  --foreground: #f2f5fb;
+  --surface: #121a2b;
+  --border: #2a3650;
+  --muted: #a3aec2;
+  --accent: #1f5fcc;
+  --on-accent: #ffffff;
+  --accent-ink: #8cb1ff;
+  --warn: #f2b84b;
+  --danger: #ff8a80;
+  --scrim: rgb(5 8 14 / 0.72);
   color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --background: #f5f7fb;
+    --foreground: #0a0f1a;
+    --surface: #ffffff;
+    --border: #cfd7e5;
+    --muted: #4b576b;
+    --accent-ink: #1a4fb0;
+    --warn: #8a5a00;
+    --danger: #b42318;
+    --scrim: rgb(10 15 26 / 0.5);
+    color-scheme: light;
+  }
 }
 
 @theme inline {
@@ -20,6 +42,9 @@
   --color-border: var(--border);
   --color-muted: var(--muted);
   --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-scrim: var(--scrim);
   --color-warn: var(--warn);
   --color-danger: var(--danger);
   --font-sans: var(--font-geist-sans);
@@ -42,4 +67,37 @@ body {
 button,
 a {
   touch-action: manipulation;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent-ink);
+  outline-offset: 3px;
+}
+
+/* Live level indicator, only while Finn is listening/speaking. */
+.finn-eq {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 28px;
+}
+.finn-eq span {
+  width: 6px;
+  height: 100%;
+  border-radius: 3px;
+  background: currentColor;
+  transform-origin: bottom;
+  transform: scaleY(0.4);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .finn-eq span {
+    animation: finn-eq 900ms ease-in-out infinite alternate;
+  }
+  .finn-eq span:nth-child(2) { animation-delay: -300ms; }
+  .finn-eq span:nth-child(3) { animation-delay: -600ms; }
+  .finn-eq span:nth-child(4) { animation-delay: -150ms; }
+}
+@keyframes finn-eq {
+  from { transform: scaleY(0.3); }
+  to { transform: scaleY(1); }
 }

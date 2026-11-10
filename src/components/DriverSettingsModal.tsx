@@ -43,15 +43,15 @@ function DriverSettingsDialog({
       role="dialog"
       aria-modal="true"
       aria-label="Configurações do Motorista"
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 p-0 sm:p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-scrim p-0 sm:p-4"
     >
-      <div className="flex max-h-[90dvh] w-full max-w-lg flex-col rounded-t-3xl sm:rounded-3xl border border-border bg-surface shadow-2xl overflow-hidden animate-in fade-in duration-200">
+      <div className="flex max-h-[90dvh] w-full max-w-lg flex-col rounded-t-3xl sm:rounded-3xl border border-border bg-surface overflow-hidden animate-in fade-in duration-200">
         <header className="flex items-center justify-between border-b border-border px-6 py-4">
-          <h2 className="text-xl font-bold text-foreground">Configurações</h2>
+          <h2 className="text-xl font-semibold text-foreground">Configurações</h2>
           <button
             type="button"
             onClick={onClose}
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-border text-2xl text-muted transition active:scale-95"
+            className="flex h-12 w-12 items-center justify-center rounded-full border border-border text-2xl text-muted transition-transform active:scale-95"
             aria-label="Fechar"
           >
             ×
@@ -60,8 +60,13 @@ function DriverSettingsDialog({
 
         <form onSubmit={handleSave} className="flex-1 overflow-y-auto p-6 space-y-6">
           {savedNotice && (
-            <div className="rounded-2xl bg-accent/20 border border-accent/40 p-4 text-center font-medium text-accent">
-              ✓ Configurações salvas no aparelho!
+            <div className="rounded-2xl bg-accent/20 border border-accent-ink/40 p-4 text-center font-medium text-accent-ink">
+              <span className="inline-flex items-center justify-center gap-2">
+                <svg viewBox="0 0 20 20" aria-hidden="true" className="h-5 w-5 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 10.5l4 4 8-9" />
+                </svg>
+                Configurações salvas no aparelho!
+              </span>
             </div>
           )}
 
@@ -70,9 +75,9 @@ function DriverSettingsDialog({
             <h3 className="text-base font-semibold text-foreground">Voz do Assistente</h3>
             <div className="grid grid-cols-1 gap-2">
               <label
-                className={`flex cursor-pointer flex-col rounded-2xl border p-4 transition ${
+                className={`flex cursor-pointer flex-col rounded-2xl border p-4 transition-colors ${
                   ttsMode === "native"
-                    ? "border-accent bg-accent/10"
+                    ? "border-accent-ink bg-accent/10"
                     : "border-border bg-background/50 hover:border-muted"
                 }`}
               >
@@ -84,7 +89,7 @@ function DriverSettingsDialog({
                     value="native"
                     checked={ttsMode === "native"}
                     onChange={() => setTtsMode("native")}
-                    className="accent-accent"
+                    className="accent-accent-ink h-5 w-5"
                   />
                 </div>
                 <p className="mt-1 text-sm text-muted">
@@ -93,9 +98,9 @@ function DriverSettingsDialog({
               </label>
 
               <label
-                className={`flex cursor-pointer flex-col rounded-2xl border p-4 transition ${
+                className={`flex cursor-pointer flex-col rounded-2xl border p-4 transition-colors ${
                   ttsMode === "openai"
-                    ? "border-accent bg-accent/10"
+                    ? "border-accent-ink bg-accent/10"
                     : "border-border bg-background/50 hover:border-muted"
                 }`}
               >
@@ -107,7 +112,7 @@ function DriverSettingsDialog({
                     value="openai"
                     checked={ttsMode === "openai"}
                     onChange={() => setTtsMode("openai")}
-                    className="accent-accent"
+                    className="accent-accent-ink h-5 w-5"
                   />
                 </div>
                 <p className="mt-1 text-sm text-muted">
@@ -121,9 +126,9 @@ function DriverSettingsDialog({
           <section className="space-y-2">
             <span className="block text-sm font-semibold text-foreground">Motor de Voz</span>
             <div className="space-y-2">
-              <div className="flex items-center justify-between rounded-2xl border border-accent bg-accent/10 px-4 py-3">
+              <div className="flex items-center justify-between rounded-2xl border border-accent-ink bg-accent/10 px-4 py-3">
                 <span className="text-base font-medium text-foreground">Whisper STT + TTS (Ativo)</span>
-                <span className="rounded-full bg-accent/20 px-2.5 py-0.5 text-xs font-semibold text-accent">
+                <span className="rounded-full bg-accent/20 px-2.5 py-0.5 text-xs font-semibold text-accent-ink">
                   Padrão
                 </span>
               </div>
@@ -144,10 +149,10 @@ function DriverSettingsDialog({
             <div className="flex items-center justify-between">
               <h3 className="text-base font-semibold text-foreground">Spotify</h3>
               {spotify.status === "connected" && (
-                <span className="rounded-full bg-accent/20 px-3 py-1 text-sm font-semibold text-accent">Conectado</span>
+                <span className="rounded-full bg-accent/20 px-3 py-1 text-sm font-semibold text-accent-ink">Conectado</span>
               )}
               {spotify.status === "owner" && (
-                <span className="rounded-full bg-accent/20 px-3 py-1 text-sm font-semibold text-accent">
+                <span className="rounded-full bg-accent/20 px-3 py-1 text-sm font-semibold text-accent-ink">
                   Spotify do servidor
                 </span>
               )}
@@ -167,7 +172,7 @@ function DriverSettingsDialog({
                 <button
                   type="button"
                   onClick={() => void controller.connectSpotify()}
-                  className="min-h-14 w-full rounded-2xl bg-accent px-4 text-lg font-semibold text-background transition active:scale-98"
+                  className="min-h-14 w-full rounded-2xl bg-accent px-4 text-lg font-semibold text-on-accent transition-transform active:scale-[0.98]"
                 >
                   Conectar Spotify
                 </button>
@@ -176,7 +181,7 @@ function DriverSettingsDialog({
                 <button
                   type="button"
                   onClick={() => void controller.disconnectSpotify()}
-                  className="min-h-14 w-full rounded-2xl border-2 border-border bg-surface px-4 text-lg font-semibold text-foreground transition active:scale-98"
+                  className="min-h-14 w-full rounded-2xl border-2 border-border bg-surface px-4 text-lg font-semibold text-foreground transition-transform active:scale-[0.98]"
                 >
                   Desconectar
                 </button>
@@ -194,7 +199,7 @@ function DriverSettingsDialog({
                   onClose();
                   controller.openInvite();
                 }}
-                className="min-h-14 w-full rounded-2xl border-2 border-border bg-surface px-4 text-lg font-semibold text-foreground transition active:scale-98"
+                className="min-h-14 w-full rounded-2xl border-2 border-border bg-surface px-4 text-lg font-semibold text-foreground transition-transform active:scale-[0.98]"
               >
                 Entrar com outro convite
               </button>
@@ -206,7 +211,7 @@ function DriverSettingsDialog({
                     controller.signOut();
                   }
                 }}
-                className="min-h-14 w-full rounded-2xl border-2 border-danger/60 bg-surface px-4 text-lg font-semibold text-danger transition active:scale-98"
+                className="min-h-14 w-full rounded-2xl border-2 border-danger/60 bg-surface px-4 text-lg font-semibold text-danger transition-transform active:scale-[0.98]"
               >
                 Sair deste aparelho
               </button>
@@ -216,7 +221,7 @@ function DriverSettingsDialog({
           <footer className="pt-2">
             <button
               type="submit"
-              className="min-h-16 w-full rounded-3xl bg-accent text-xl font-semibold text-background transition active:scale-98"
+              className="min-h-16 w-full rounded-3xl bg-accent text-xl font-semibold text-on-accent transition-transform active:scale-[0.98]"
             >
               Salvar Alterações
             </button>

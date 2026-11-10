@@ -9,7 +9,7 @@ const req = (body: unknown = { text: "Olá" }) =>
     headers: { authorization: "Bearer s3cret", "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46, 1, 2, 3]);
+const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46, 1, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, 9, 9]);
 const geminiOk = () =>
   new Response(
     JSON.stringify({

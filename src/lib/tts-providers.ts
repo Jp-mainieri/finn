@@ -7,6 +7,12 @@
 const GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash-lite-tts";
 const DEFAULT_GEMINI_VOICE = "Kore";
+/** Timeout total (cabecalhos + corpo). Amostra real: 4,6 s de audio levou ~3,8 s. */
+export const GEMINI_TIMEOUT_MS = 8000;
+/** Teto do audio decodificado (resposta da Vercel limitada a 4,5 MB). */
+export const GEMINI_MAX_AUDIO_BYTES = 4_000_000;
+/** Acima disso vai direto ao OpenAI: ~13 caracteres/s de audio, geracao quase em tempo real. */
+export const GEMINI_MAX_TEXT_CHARS = 600;
 
 export type TtsProvider = "openai" | "gemini";
 
@@ -40,6 +46,7 @@ function findAudioData(json: unknown): string | null {
  * o chamador cai para o OpenAI. So loga o status, nunca valores.
  */
 export async function synthesizeWithGemini(text: string): Promise<GeminiAudio | null> {
+  if (text.length > GEMINI_MAX_TEXT_CHARS) return null;
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
     console.warn("[tts] gemini skipped: not configured");
@@ -51,6 +58,8 @@ export async function synthesizeWithGemini(text: string): Promise<GeminiAudio | 
   try {
     const res = await fetch(GEMINI_INTERACTIONS_URL, {
       method: "POST",
+      redirect: "error",
+      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
       headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
       body: JSON.stringify({
         model,
@@ -68,9 +77,18 @@ export async function synthesizeWithGemini(text: string): Promise<GeminiAudio | 
       console.warn("[tts] gemini failed: no audio in response");
       return null;
     }
+    // 4 chars base64 = 3 bytes; evita decodificar uma resposta absurda.
+    if (data.length > Math.ceil(GEMINI_MAX_AUDIO_BYTES / 3) * 4 + 4) {
+      console.warn("[tts] gemini failed: audio too large");
+      return null;
+    }
     const buf = Buffer.from(data, "base64");
-    if (buf.byteLength === 0) {
-      console.warn("[tts] gemini failed: empty audio");
+    if (buf.byteLength > GEMINI_MAX_AUDIO_BYTES) {
+      console.warn("[tts] gemini failed: audio too large");
+      return null;
+    }
+    if (buf.byteLength < 12 || buf.toString("latin1", 0, 4) !== "RIFF" || buf.toString("latin1", 8, 12) !== "WAVE") {
+      console.warn("[tts] gemini failed: audio is not WAV");
       return null;
     }
     const bytes = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;

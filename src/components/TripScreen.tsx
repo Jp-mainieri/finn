@@ -4,12 +4,13 @@ import { useState } from "react";
 import { isRecoverable } from "@/lib/voice/state-machine";
 import { statusText, wakeWordNotice, type StatusTone } from "@/lib/voice/status";
 import type { VoiceController, VoiceView } from "@/lib/voice/voice-controller";
+import { FinnWordmark } from "./FinnMark";
 import { DriverSettingsModal } from "./DriverSettingsModal";
 
 const TONE_CLASS: Record<StatusTone, string> = {
   idle: "text-foreground",
   ready: "text-foreground",
-  active: "text-accent",
+  active: "text-accent-ink",
   busy: "text-warn",
   error: "text-danger",
 };
@@ -33,10 +34,10 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
     <div className="flex w-full flex-1 flex-col gap-5">
       <header className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <span className="text-2xl font-bold">Finn</span>
+          <FinnWordmark />
           <span
             title="Versão atual carregada no aparelho"
-            className="rounded-full border border-border bg-surface px-2.5 py-0.5 font-mono text-xs text-accent"
+            className="rounded-full border border-border bg-surface px-2.5 py-0.5 font-mono text-xs text-accent-ink"
           >
             {FINN_UI_VERSION}
           </span>
@@ -60,7 +61,7 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
 
       <section aria-live="polite" className="flex flex-1 flex-col justify-center gap-6 py-4">
         <p
-          className={`break-words text-5xl leading-tight font-bold sm:text-6xl ${TONE_CLASS[status.tone]} ${
+          className={`break-words text-5xl leading-tight font-semibold sm:text-6xl ${TONE_CLASS[status.tone]} ${
             status.tone === "active" ? "animate-pulse" : ""
           }`}
         >
@@ -76,7 +77,7 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
             )}
             {view.assistantText && (
               <p className="break-words text-muted">
-                <span className="font-semibold text-accent">Finn: </span>
+                <span className="font-semibold text-accent-ink">Finn: </span>
                 {view.assistantText}
               </p>
             )}
@@ -91,7 +92,7 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => controller.dismissAction(action.id)}
-            className={`${BIG_BUTTON} flex flex-1 items-center justify-center bg-accent text-center text-background`}
+            className={`${BIG_BUTTON} flex flex-1 items-center justify-center bg-accent text-center text-on-accent`}
           >
             {action.label}
           </a>
@@ -107,7 +108,7 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
 
       {!inTrip || needsMicTap ? (
         <div className="space-y-3">
-          <button onClick={() => controller.startTrip()} className={`${BIG_BUTTON} bg-accent text-background`}>
+          <button onClick={() => controller.startTrip()} className={`${BIG_BUTTON} bg-accent text-on-accent`}>
             {inTrip ? "Retomar o Finn" : "Iniciar viagem"}
           </button>
           {!inTrip && (
@@ -121,7 +122,7 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
           {voice.activity !== "thinking" && (
             <button
               onClick={() => controller.commitSpeech()}
-              className={`${BIG_BUTTON} bg-accent text-background`}
+              className={`${BIG_BUTTON} bg-accent text-on-accent`}
             >
               Pronto, enviar fala
             </button>
@@ -137,7 +138,7 @@ export function TripScreen({ view, controller }: { view: VoiceView; controller: 
         <button
           onClick={() => controller.talk()}
           disabled={voice.state === "closing"}
-          className={`${BIG_BUTTON} bg-accent text-background disabled:opacity-40`}
+          className={`${BIG_BUTTON} bg-accent text-on-accent disabled:opacity-40`}
         >
           Falar com o Finn
         </button>

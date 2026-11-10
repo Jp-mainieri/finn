@@ -8,7 +8,7 @@
 const OFFLINE_HTML = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Finn</title>
 <style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
-background:#07090d;color:#f3f5f7;font:600 1.6rem system-ui,-apple-system,sans-serif;text-align:center;padding:1rem}</style>
+background:#0a0f1a;color:#f2f5fb;font:600 1.6rem system-ui,-apple-system,sans-serif;text-align:center;padding:1rem}</style>
 </head><body><p>Sem internet.<br>O Finn volta quando a conexão voltar.</p></body></html>`;
 
 self.addEventListener("install", () => self.skipWaiting());

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { FinnWordmark } from "./FinnMark";
 import type { InviteResult } from "@/lib/voice/invite-client";
 
 export function InviteSetup({
@@ -39,7 +40,9 @@ export function InviteSetup({
       }}
     >
       <div className="space-y-3">
-        <h1 className="text-5xl font-bold tracking-tight">Finn</h1>
+        <h1>
+          <FinnWordmark size="lg" />
+        </h1>
         <p className="text-lg text-muted">Digite o código do seu convite. Ele só é usado uma vez para entrar.</p>
         {rejected && !error && (
           <p role="alert" className="rounded-2xl bg-danger/15 p-4 text-lg text-danger">
@@ -66,12 +69,12 @@ export function InviteSetup({
         value={code}
         onChange={(e) => setCode(e.target.value)}
         placeholder="FINN-XXXX-XXXX"
-        className="w-full rounded-2xl border border-border bg-surface px-5 py-5 text-center font-mono text-2xl uppercase tracking-widest outline-none focus:border-accent"
+        className="w-full rounded-2xl border border-border bg-surface px-5 py-5 text-center font-mono text-2xl uppercase tracking-widest outline-none focus-visible:border-accent-ink focus-visible:ring-2 focus-visible:ring-accent-ink"
       />
       <button
         type="submit"
         disabled={!code.trim() || busy}
-        className="min-h-20 w-full rounded-3xl bg-accent text-2xl font-semibold text-background disabled:opacity-40"
+        className="min-h-20 w-full rounded-3xl bg-accent text-2xl font-semibold text-on-accent disabled:opacity-40"
       >
         {busy ? "Entrando…" : "Entrar"}
       </button>

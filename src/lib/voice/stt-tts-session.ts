@@ -102,6 +102,8 @@ export class SttTtsVoiceSession implements VoiceSession {
   private connected = false;
   private closed = false;
   private speaking = false;
+  /** Bumped by interrupt(): a TTS started under an older value must not play. */
+  private speechGen = 0;
   private transcribing = false;
   private isRecording = false;
   private speechFramesCount = 0;
@@ -402,7 +404,9 @@ export class SttTtsVoiceSession implements VoiceSession {
     const mode = this.options.getTtsMode?.() ?? (this.options.fetchImpl ? "native" : "openai");
     if (mode === "openai" || !this.options.fetchImpl) {
       this.speaking = true;
-      this.playOpenAiTts(text).catch((err) => {
+      const gen = this.speechGen;
+      this.playOpenAiTts(text, gen).catch((err) => {
+        if (gen !== this.speechGen) return; // interrupted: no fallback voice
         console.warn("[voice-session] OpenAI TTS failed, falling back to native TTS", err);
         this.playNativeTts(text);
       });
@@ -443,7 +447,7 @@ export class SttTtsVoiceSession implements VoiceSession {
     this.bargeInFrames = 0;
   }
 
-  private async playOpenAiTts(text: string): Promise<void> {
+  private async playOpenAiTts(text: string, gen: number): Promise<void> {
     this.beginSpeakingState();
     const token = this.options.getToken();
     const fetchFn = this.fetchImpl;
@@ -459,8 +463,8 @@ export class SttTtsVoiceSession implements VoiceSession {
     if (!res.ok) throw new Error(`TTS HTTP ${res.status}`);
 
     const ab = await res.arrayBuffer();
-    if (this.closed) {
-      this.endSpeakingState();
+    if (this.closed || gen !== this.speechGen) {
+      if (gen === this.speechGen) this.endSpeakingState();
       return;
     }
 
@@ -471,8 +475,8 @@ export class SttTtsVoiceSession implements VoiceSession {
       try {
         await this.options.audio.resume?.();
         const audioBuffer = await ctx.decodeAudioData(ab.slice(0));
-        if (this.closed) {
-          this.endSpeakingState();
+        if (this.closed || gen !== this.speechGen) {
+          if (gen === this.speechGen) this.endSpeakingState();
           return;
         }
         this.beginSpeakingState();
@@ -588,6 +592,13 @@ export class SttTtsVoiceSession implements VoiceSession {
     };
 
     synth.speak(utter);
+  }
+
+  /** Driver tapped "Parar e falar": cut audio now and abort any TTS still being fetched or decoded. */
+  interrupt(): void {
+    if (this.closed) return;
+    this.speechGen += 1;
+    this.stopSpeaking();
   }
 
   private stopSpeaking(): void {

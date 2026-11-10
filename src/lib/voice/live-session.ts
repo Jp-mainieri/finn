@@ -36,6 +36,7 @@ export class GptLiveSession implements VoiceSession {
   private closed = false;
   private closing = false;
   private seq = 0;
+  private remoteMuted = false;
   private onStarted: (() => void) | null = null;
   private onAborted: ((err: Error) => void) | null = null;
   private onFinalized: (() => void) | null = null;
@@ -86,6 +87,27 @@ export class GptLiveSession implements VoiceSession {
     const eventId = this.nextEventId("result");
     this.send(commentaryAppend(eventId, delegationId, text.slice(0, MAX_SPOKEN_CHARS)));
     return eventId;
+  }
+
+  /**
+   * Silences the assistant right now. The protocol subset Finn is allowed to send has no
+   * "cancel response" event, so the remote audio is muted; it is unmuted when the driver
+   * speaks again (the server's own voice detection then cuts the old answer) or on new output.
+   */
+  interrupt(): void {
+    if (this.closed) return;
+    this.setRemoteAudio(false);
+  }
+
+  private setRemoteAudio(on: boolean): void {
+    this.remoteMuted = !on;
+    try {
+      for (const receiver of this.pc.getReceivers?.() ?? []) {
+        if (receiver.track && receiver.track.kind === "audio") receiver.track.enabled = on;
+      }
+    } catch {
+      // receivers not available
+    }
   }
 
   async close(): Promise<void> {
@@ -152,6 +174,7 @@ export class GptLiveSession implements VoiceSession {
         this.onStarted?.();
         break;
       case "session.input_transcript.delta":
+        if (this.remoteMuted) this.setRemoteAudio(true);
         handlers.onUserTranscript({ delta: event.delta, startMs: event.startMs, endMs: event.endMs });
         break;
       case "session.output_transcript.delta":

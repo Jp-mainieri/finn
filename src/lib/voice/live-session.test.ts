@@ -86,3 +86,36 @@ describe("GptLiveSession.connect: 429 and 503 from /api/realtime/session", () =>
     expect((error as Error).message).not.toMatch(/token|scope/i);
   });
 });
+
+describe("GptLiveSession.interrupt", () => {
+  it("mutes the remote audio, and unmutes it when the driver speaks again; no-op once closed", async () => {
+    const audioTrack = { kind: "audio", enabled: true };
+    const videoTrack = { kind: "video", enabled: true };
+    let dcMessage: (e: { data: string }) => void = () => {};
+    class Pc extends FakePeerConnection {
+      getReceivers() {
+        return [{ track: audioTrack }, { track: videoTrack }];
+      }
+      createDataChannel(): never {
+        return {
+          readyState: "open",
+          close() {},
+          addEventListener: (t: string, fn: (e: { data: string }) => void) => {
+            if (t === "message") dcMessage = fn;
+          },
+        } as never;
+      }
+    }
+    vi.stubGlobal("RTCPeerConnection", Pc);
+    vi.stubGlobal("MediaStream", class {});
+    const handlers = { onUserTranscript: vi.fn() } as unknown as VoiceSessionHandlers;
+    const session = new GptLiveSession({ micTrack: {} as MediaStreamTrack, micStream: {} as MediaStream, getToken: () => "t", handlers });
+
+    session.interrupt();
+    expect(audioTrack.enabled).toBe(false);
+    expect(videoTrack.enabled).toBe(true);
+
+    dcMessage({ data: JSON.stringify({ type: "session.input_transcript.delta", delta: "oi", start_ms: 0, end_ms: 1 }) });
+    expect(audioTrack.enabled).toBe(true);
+  });
+});

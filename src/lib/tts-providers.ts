@@ -1,0 +1,82 @@
+/**
+ * Provedores de TTS da rota POST /api/realtime/tts (somente servidor).
+ * `FINN_TTS_PROVIDER` = "openai" (padrao) ou "gemini"; qualquer outro valor = openai.
+ * A chave do Gemini nunca e logada nem devolvida.
+ */
+
+const GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
+const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash-lite-tts";
+const DEFAULT_GEMINI_VOICE = "Kore";
+
+export type TtsProvider = "openai" | "gemini";
+
+export function resolveTtsProvider(): TtsProvider {
+  return process.env.FINN_TTS_PROVIDER?.trim().toLowerCase() === "gemini" ? "gemini" : "openai";
+}
+
+export interface GeminiAudio {
+  bytes: ArrayBuffer;
+  contentType: string;
+}
+
+function findAudioData(json: unknown): string | null {
+  const steps = (json as { steps?: unknown })?.steps;
+  if (!Array.isArray(steps)) return null;
+  for (const step of steps) {
+    if (!step || typeof step !== "object" || (step as { type?: unknown }).type !== "model_output") continue;
+    const content = (step as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (const item of content) {
+      const it = item as { type?: unknown; data?: unknown };
+      if (it?.type === "audio" && typeof it.data === "string" && it.data.length > 0) return it.data;
+    }
+  }
+  return null;
+}
+
+/**
+ * Sintetiza com o Gemini (requisicao unaria, WAV 24 kHz mono 16-bit).
+ * Devolve null em qualquer falha (chave ausente, rede, nao-2xx, corpo sem audio);
+ * o chamador cai para o OpenAI. So loga o status, nunca valores.
+ */
+export async function synthesizeWithGemini(text: string): Promise<GeminiAudio | null> {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey) {
+    console.warn("[tts] gemini skipped: not configured");
+    return null;
+  }
+  const model = process.env.GEMINI_TTS_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
+  const voice = process.env.GEMINI_TTS_VOICE?.trim() || DEFAULT_GEMINI_VOICE;
+
+  try {
+    const res = await fetch(GEMINI_INTERACTIONS_URL, {
+      method: "POST",
+      headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        input: [{ type: "user_input", content: [{ type: "text", text }] }],
+        response_format: { type: "audio" },
+        generation_config: { speech_config: [{ voice }] },
+      }),
+    });
+    if (!res.ok) {
+      console.warn(`[tts] gemini failed: HTTP ${res.status}`);
+      return null;
+    }
+    const data = findAudioData(await res.json());
+    if (!data) {
+      console.warn("[tts] gemini failed: no audio in response");
+      return null;
+    }
+    const buf = Buffer.from(data, "base64");
+    if (buf.byteLength === 0) {
+      console.warn("[tts] gemini failed: empty audio");
+      return null;
+    }
+    const bytes = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+    return { bytes, contentType: "audio/wav" };
+  } catch {
+    console.warn("[tts] gemini failed: request error");
+    return null;
+  }
+}

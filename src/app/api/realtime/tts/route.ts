@@ -1,6 +1,7 @@
 import { authorizeDriver } from "@/lib/auth";
 import { enforceAiLimit } from "@/lib/ai-limits";
 import { optionalEnv } from "@/lib/env";
+import { resolveTtsProvider, synthesizeWithGemini } from "@/lib/tts-providers";
 
 const OPENAI_SPEECH_URL = "https://api.openai.com/v1/audio/speech";
 const MAX_TEXT_LENGTH = 1200;
@@ -93,6 +94,17 @@ export async function POST(request: Request) {
       { error: `Text is required and must be between 1 and ${MAX_TEXT_LENGTH} characters` },
       { status: 400 },
     );
+  }
+
+  if (resolveTtsProvider() === "gemini") {
+    const gemini = await synthesizeWithGemini(text);
+    if (gemini) {
+      return new Response(gemini.bytes, {
+        status: 200,
+        headers: { "Content-Type": gemini.contentType, "Cache-Control": "no-store" },
+      });
+    }
+    // Falha do Gemini: cai uma vez para o OpenAI abaixo.
   }
 
   const apiKey = process.env.OPENAI_API_KEY?.trim();

@@ -66,6 +66,8 @@ export class VoiceController {
   private autoOpen: { action: PendingAction; since: number; spokeAfter: boolean } | null = null;
   private openAfterClose: PendingAction | null = null;
   private disposed = false;
+  /** True only between "Iniciar viagem" (a fresh trip) and the first connection it causes. */
+  private greetOnNextConnect = false;
   private settingsOpen = false;
   /** Bumped whenever the signed-in driver changes (sign out, new invite, rejected session). */
   private epoch = 0;
@@ -233,9 +235,13 @@ export class VoiceController {
     void audio.resume();
     void this.requestWakeLock();
 
+    // The greeting belongs to the start of a new trip, not to resuming one after a mic error.
+    const freshTrip = this.machine.current.state === "idle";
+
     audio
       .openMic()
       .then(() => {
+        if (freshTrip) this.greetOnNextConnect = true;
         this.machine.dispatch({ type: "TRIP_STARTED" });
         this.watchMic();
         if (!this.detector) void this.initWakeWord();
@@ -244,6 +250,7 @@ export class VoiceController {
         }
       })
       .catch((err: unknown) => {
+        this.greetOnNextConnect = false;
         const denied = err instanceof DOMException && (err.name === "NotAllowedError" || err.name === "SecurityError");
         this.fail(
           denied
@@ -268,11 +275,19 @@ export class VoiceController {
     this.session?.commitSpeech?.();
   }
 
+  /** "Parar e falar": cuts the assistant's speech; the mic stays open and the app goes back to listening. */
+  interrupt(): void {
+    this.session?.interrupt?.();
+    this.lastAssistantSignal = 0;
+    this.machine.dispatch({ type: "ASSISTANT_QUIET" });
+  }
+
   hangUp(): void {
     this.machine.dispatch({ type: "HANG_UP" });
   }
 
   endTrip(): void {
+    this.greetOnNextConnect = false;
     this.autoOpen = null;
     this.openAfterClose = null;
     void this.session?.close();
@@ -423,14 +438,17 @@ export class VoiceController {
     try {
       await session.connect();
       if (this.session === session) {
+        const greet = this.greetOnNextConnect;
+        this.greetOnNextConnect = false;
         this.machine.dispatch({ type: "CONNECTED" });
-        void this.greetDriver(session);
+        if (greet) void this.greetDriver(session);
       } else {
         await session.close();
       }
     } catch (err) {
       if (this.session !== session) return;
       this.session = null;
+      this.greetOnNextConnect = false;
       if (err instanceof UnauthorizedError) {
         this.requireToken();
         this.fail({ kind: "unauthorized", message: "Sessão recusada. Entre com um convite de novo." });

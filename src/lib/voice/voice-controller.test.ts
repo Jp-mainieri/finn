@@ -22,6 +22,29 @@ vi.mock("./stt-tts-session", () => ({
   },
 }));
 
+/** `startTrip` builds a real AudioIO and wake-word engine; these doubles keep the mic "open" without a browser. */
+vi.mock("./audio-io", () => ({
+  AudioIO: class {
+    stream = {};
+    micTrack = { readyState: "live", addEventListener() {} };
+    micAlive = true;
+    async resume() {}
+    unlockSpeechSynthesis() {}
+    async openMic() {}
+    detachRemote() {}
+    attachRemote() {}
+    earcon() {}
+    setFrameSink() {}
+    release() {}
+    remoteLevel() {
+      return 0;
+    }
+  },
+}));
+vi.mock("./wake-word", () => ({
+  createWakeWordDetector: async () => ({ detector: null, status: { available: false, reason: "test" } }),
+}));
+
 /**
  * The VoiceController runs in the node environment with a stubbed `window` and `fetch`:
  * no DOM library needed. Everything here is the glue the pure modules cannot prove on
@@ -462,6 +485,131 @@ describe("VoiceController", () => {
 
     it("the three limit lines are distinct", () => {
       expect(new Set([LOCAL_SPEECH.day_limited, LOCAL_SPEECH.rate_limited, LOCAL_SPEECH.unavailable]).size).toBe(3);
+    });
+  });
+
+  describe("greeting only when a trip starts", () => {
+    const flush = async () => {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    };
+
+    /** Controller with a greeting spy; connect() succeeds. */
+    function greeting() {
+      const c = make("v1.t");
+      sessionDouble.connect = () => Promise.resolve();
+      const greet = vi.spyOn(c as unknown as { greetDriver: () => Promise<void> }, "greetDriver").mockResolvedValue();
+      return { c, greet };
+    }
+    const state = (c: VoiceController) => c.getView().voice.state;
+
+    it("'Iniciar viagem' greets once, on the first connection", async () => {
+      const { c, greet } = greeting();
+      c.startTrip();
+      await flush();
+      expect(state(c)).toBe("in-conversation");
+      expect(greet).toHaveBeenCalledTimes(1);
+      c.dispose();
+    });
+
+    it("hang up and reconnect with 'Falar com o Finn' does not greet again", async () => {
+      const { c, greet } = greeting();
+      c.startTrip();
+      await flush();
+      c.hangUp();
+      await flush();
+      expect(state(c)).toBe("listening-wake");
+      c.talk();
+      await flush();
+      expect(state(c)).toBe("in-conversation");
+      expect(greet).toHaveBeenCalledTimes(1);
+      c.dispose();
+    });
+
+    it("the wake word path (talk() from the detector) after a session closed by inactivity does not greet", async () => {
+      const { c, greet } = greeting();
+      c.startTrip();
+      await flush();
+      (c as unknown as { machine: { dispatch: (e: { type: string }) => void } }).machine.dispatch({ type: "CLOSED" });
+      await flush();
+      c.talk();
+      await flush();
+      expect(greet).toHaveBeenCalledTimes(1);
+      c.dispose();
+    });
+
+    it("'Retomar o Finn' (trip already running, e.g. after a mic error) does not greet", async () => {
+      const { c, greet } = greeting();
+      c.startTrip();
+      await flush();
+      greet.mockClear();
+      (c as unknown as { fail: (e: unknown) => void }).fail({ kind: "mic-lost", message: "x" });
+      expect(state(c)).toBe("error");
+      c.startTrip();
+      await flush();
+      expect(state(c)).toBe("in-conversation");
+      expect(greet).not.toHaveBeenCalled();
+      c.dispose();
+    });
+
+    it("a new trip after 'Encerrar viagem' greets again", async () => {
+      const { c, greet } = greeting();
+      c.startTrip();
+      await flush();
+      c.endTrip();
+      c.startTrip();
+      await flush();
+      expect(greet).toHaveBeenCalledTimes(2);
+      c.dispose();
+    });
+
+    it("the flag is cleared by endTrip", () => {
+      const { c } = greeting();
+      (c as unknown as { greetOnNextConnect: boolean }).greetOnNextConnect = true;
+      c.endTrip();
+      expect((c as unknown as { greetOnNextConnect: boolean }).greetOnNextConnect).toBe(false);
+      c.dispose();
+    });
+
+    it("a failed first connection clears the flag: the retry does not greet", async () => {
+      const { c, greet } = greeting();
+      sessionDouble.connect = () => Promise.reject(new Error("boom"));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      c.startTrip();
+      await flush();
+      expect(state(c)).toBe("error");
+      sessionDouble.connect = () => Promise.resolve();
+      c.talk();
+      await flush();
+      expect(state(c)).toBe("in-conversation");
+      expect(greet).not.toHaveBeenCalled();
+      warn.mockRestore();
+      c.dispose();
+    });
+  });
+
+  describe("interrupt ('Parar e falar')", () => {
+    it("calls the session and returns the state to listening", async () => {
+      const c = make("v1.t");
+      sessionDouble.connect = () => Promise.resolve();
+      vi.spyOn(c as unknown as { greetDriver: () => Promise<void> }, "greetDriver").mockResolvedValue();
+      c.startTrip();
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      const session = { ...fakeSession(), interrupt: vi.fn() };
+      internals(c).session = session;
+      (c as unknown as { machine: { dispatch: (e: { type: string }) => void } }).machine.dispatch({ type: "ASSISTANT_SPEECH" });
+      expect(c.getView().voice).toMatchObject({ state: "in-conversation", activity: "speaking" });
+      c.interrupt();
+      expect(session.interrupt).toHaveBeenCalledTimes(1);
+      expect(c.getView().voice).toMatchObject({ state: "in-conversation", activity: "listening" });
+      c.dispose();
+    });
+
+    it("without a session, or a session with no interrupt(), it does not throw", () => {
+      const c = make("v1.t");
+      expect(() => c.interrupt()).not.toThrow();
+      internals(c).session = fakeSession();
+      expect(() => c.interrupt()).not.toThrow();
+      c.dispose();
     });
   });
 });

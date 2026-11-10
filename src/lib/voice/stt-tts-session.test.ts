@@ -374,3 +374,126 @@ describe("SttTtsVoiceSession session lifecycle & VAD", () => {
     });
   });
 });
+
+describe("SttTtsVoiceSession.interrupt ('Parar e falar')", () => {
+  const flush = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+  const source = { buffer: null as unknown, connect: vi.fn(), start: vi.fn(), stop: vi.fn(), onended: null as null | (() => void) };
+  const nativeSpeak = vi.fn();
+  const fetchMock = vi.fn<typeof fetch>();
+  let handlers: VoiceSessionHandlers;
+  let audio: Record<string, unknown>;
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    nativeSpeak.mockReset();
+    source.start.mockReset();
+    source.stop.mockReset();
+    source.connect.mockReset().mockReturnValue({ connect: vi.fn() });
+    vi.stubGlobal("window", {
+      speechSynthesis: { speaking: false, cancel: vi.fn(), resume: vi.fn(), getVoices: () => [], speak: nativeSpeak },
+    });
+    vi.stubGlobal("SpeechSynthesisUtterance", class {});
+    audio = {
+      setSessionFrameSink: vi.fn(),
+      resume: async () => {},
+      output: { pause: vi.fn(), play: vi.fn(async () => {}), addEventListener: vi.fn(), removeEventListener: vi.fn() },
+      context: {
+        decodeAudioData: async () => ({ duration: 5 }),
+        createBufferSource: () => source,
+        createGain: () => ({ gain: { value: 1 }, connect: vi.fn().mockReturnValue({}) }),
+        destination: {},
+      },
+    };
+    handlers = {
+      onUserTranscript: vi.fn(),
+      onAssistantTranscript: vi.fn(),
+      onDelegation: vi.fn(),
+      onRemoteStream: vi.fn(),
+      onClosed: vi.fn(),
+      onError: vi.fn(),
+    };
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  const make = () =>
+    new SttTtsVoiceSession({
+      audio: audio as unknown as AudioIO,
+      getToken: () => "tok",
+      getTtsMode: () => "openai",
+      handlers,
+      fetchImpl: fetchMock,
+    });
+
+  it("stops audio that is already playing and clears the speaking flag, keeping the session open", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(new Uint8Array(8)));
+    const session = make();
+    await session.connect();
+    session.speak(null, "Bom dia");
+    await flush();
+    expect(source.start).toHaveBeenCalledTimes(1);
+    expect(session.isSpeaking()).toBe(true);
+
+    session.interrupt();
+    expect(source.stop).toHaveBeenCalledTimes(1);
+    expect(session.isSpeaking()).toBe(false);
+    expect(handlers.onClosed).not.toHaveBeenCalled();
+    expect(audio.setSessionFrameSink).not.toHaveBeenLastCalledWith(null);
+  });
+
+  it("aborts a TTS still being fetched: it never plays and the native voice does not take over", async () => {
+    let answer!: (r: Response) => void;
+    fetchMock.mockReturnValueOnce(new Promise<Response>((r) => (answer = r)));
+    const session = make();
+    await session.connect();
+    session.speak(null, "Bom dia");
+    expect(session.isSpeaking()).toBe(true);
+
+    session.interrupt();
+    expect(session.isSpeaking()).toBe(false);
+    answer(new Response(new Uint8Array(8)));
+    await flush();
+    expect(source.start).not.toHaveBeenCalled();
+    expect(nativeSpeak).not.toHaveBeenCalled();
+    expect(session.isSpeaking()).toBe(false);
+  });
+
+  it("an interrupted TTS that then fails does not fall back to the native voice", async () => {
+    let fail!: (e: Error) => void;
+    fetchMock.mockReturnValueOnce(new Promise<Response>((_, rej) => (fail = rej)));
+    const session = make();
+    await session.connect();
+    session.speak(null, "Bom dia");
+    session.interrupt();
+    fail(new Error("network"));
+    await flush();
+    expect(nativeSpeak).not.toHaveBeenCalled();
+  });
+
+  it("a reply spoken after the interruption plays normally", async () => {
+    fetchMock.mockImplementation(async () => new Response(new Uint8Array(8)));
+    const session = make();
+    await session.connect();
+    session.speak(null, "um");
+    session.interrupt();
+    await flush();
+    source.start.mockClear();
+    session.speak(null, "dois");
+    await flush();
+    expect(source.start).toHaveBeenCalledTimes(1);
+    expect(session.isSpeaking()).toBe(true);
+  });
+
+  it("stops native speech and does nothing on a closed session", async () => {
+    const session = make();
+    await session.connect();
+    session.interrupt();
+    expect(window.speechSynthesis.cancel).toHaveBeenCalled();
+    await session.close();
+    expect(() => session.interrupt()).not.toThrow();
+  });
+});

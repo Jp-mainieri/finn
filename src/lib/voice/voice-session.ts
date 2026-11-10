@@ -38,6 +38,8 @@ export interface VoiceSession {
   speakLocal?(text: string): void;
   /** Optional manual trigger to immediately finish and send the current user utterance. */
   commitSpeech?(): void;
+  /** Optional: cuts the assistant's speech right now (audio and anything pending) and keeps the session open. */
+  interrupt?(): void;
 }
 
 export class UnauthorizedError extends Error {

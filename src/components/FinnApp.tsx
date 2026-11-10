@@ -3,6 +3,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { TokenStore } from "@/lib/voice/token-store";
 import { VoiceController, type VoiceView } from "@/lib/voice/voice-controller";
+import { FinnWordmark } from "./FinnMark";
 import { InviteSetup } from "./InviteSetup";
 import { TripScreen } from "./TripScreen";
 
@@ -41,7 +42,9 @@ export function FinnApp() {
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
       {!view ? (
-        <div className="flex flex-1 items-center justify-center text-5xl font-bold">Finn</div>
+        <div className="flex flex-1 items-center justify-center">
+          <FinnWordmark size="lg" />
+        </div>
       ) : view.needsToken ? (
         <InviteSetup
           rejected={view.tokenRejected}

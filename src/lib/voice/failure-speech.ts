@@ -15,6 +15,24 @@ export const LOCAL_SPEECH = {
   unavailable: "O Finn está fora do ar agora, tente de novo daqui a pouco.",
 } as const satisfies Record<ServerFailureKind, string>;
 
+/**
+ * Lines for a speech request that failed without a 429/503 (network error, HTTP 5xx, other).
+ * Spoken locally; the raw error is never shown or spoken. Wording is a proposal, owner decides.
+ */
+export const SPEECH_FAILURE_LINES = {
+  not_heard: "Não consegui te ouvir, tente de novo.",
+  offline: "Sem internet.",
+} as const;
+
+/**
+ * True when a failed fetch looks like missing connectivity: the browser says it is offline, or
+ * fetch rejected with a TypeError (WebKit: "Load failed", Chrome: "Failed to fetch").
+ */
+export function isOffline(err: unknown): boolean {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
+  return err instanceof TypeError;
+}
+
 /** The 429 body is `{ error, scope }`, a few dozen bytes; anything bigger is not read. */
 const MAX_BODY_BYTES = 1024;
 const BODY_DEADLINE_MS = 1500;

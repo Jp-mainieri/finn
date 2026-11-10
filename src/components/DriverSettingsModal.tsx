@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { attachDialogA11y } from "./dialog-a11y";
 import {
   getDriverSettings,
   saveDriverSettings,
@@ -8,6 +9,13 @@ import {
 } from "@/lib/voice/driver-settings";
 import { SPOTIFY_MESSAGES } from "@/lib/voice/spotify-connection";
 import type { VoiceController, VoiceView } from "@/lib/voice/voice-controller";
+
+type TtsMode = DriverSettings["ttsMode"];
+
+/** Saves the voice as soon as the driver taps an option: nothing is lost if the dialog is closed. */
+export function chooseTtsMode(mode: TtsMode, save = saveDriverSettings): void {
+  save({ ttsMode: mode, voiceProvider: "stt-tts" });
+}
 
 function DriverSettingsDialog({
   onClose,
@@ -20,60 +28,66 @@ function DriverSettingsDialog({
 }) {
   const [settings] = useState<DriverSettings>(() => getDriverSettings());
   const [ttsMode, setTtsMode] = useState<"native" | "openai">(settings.ttsMode);
-  const [savedNotice, setSavedNotice] = useState(false);
   const spotify = view.spotify;
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     controller.setSettingsOpen(true);
     return () => controller.setSettingsOpen(false);
   }, [controller]);
 
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    saveDriverSettings({ ttsMode, voiceProvider: "stt-tts" });
-    setSavedNotice(true);
-    setTimeout(() => {
-      setSavedNotice(false);
-      onClose();
-    }, 400);
+  useEffect(() => {
+    const root = overlayRef.current;
+    if (!root) return;
+    return attachDialogA11y({
+      root,
+      initialFocus: titleRef.current,
+      onClose: () => onCloseRef.current(),
+      doc: document,
+    });
+  }, []);
+
+  const handleChooseTts = (mode: TtsMode) => {
+    setTtsMode(mode);
+    chooseTtsMode(mode);
   };
 
   return (
     <div
+      ref={overlayRef}
       role="dialog"
       aria-modal="true"
-      aria-label="Configurações do motorista"
+      aria-labelledby="driver-settings-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-scrim p-0 sm:p-4"
     >
       <div className="flex max-h-[90dvh] w-full max-w-lg flex-col rounded-t-3xl sm:rounded-3xl border border-border bg-surface overflow-hidden animate-in fade-in duration-200">
         <header className="flex items-center justify-between border-b border-border px-6 py-4">
-          <h2 className="text-xl font-semibold text-foreground">Configurações</h2>
+          <h2 id="driver-settings-title" ref={titleRef} tabIndex={-1} className="text-xl font-semibold text-foreground outline-none">
+            Configurações
+          </h2>
           <button
             type="button"
             onClick={onClose}
-            className="flex h-12 w-12 items-center justify-center rounded-full border border-border text-2xl text-muted transition-transform active:scale-95"
+            className="flex h-12 min-h-12 w-12 min-w-12 items-center justify-center rounded-full border border-border text-2xl text-muted transition-transform active:scale-95"
             aria-label="Fechar"
           >
             ×
           </button>
         </header>
 
-        <form onSubmit={handleSave} className="flex-1 overflow-y-auto p-6 space-y-6">
-          {savedNotice && (
-            <div className="rounded-2xl bg-accent/20 border border-accent-ink/40 p-4 text-center font-medium text-accent-ink">
-              <span className="inline-flex items-center justify-center gap-2">
-                <svg viewBox="0 0 20 20" aria-hidden="true" className="h-5 w-5 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 10.5l4 4 8-9" />
-                </svg>
-                Configurações salvas
-              </span>
-            </div>
-          )}
-
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {/* Voz do Assistente */}
           <section className="space-y-3">
             <h3 className="text-base font-semibold text-foreground">Voz do assistente</h3>
-            <div className="grid grid-cols-1 gap-2">
+            <div role="radiogroup" aria-label="Voz do assistente" className="grid grid-cols-1 gap-2">
               <label
                 className={`flex cursor-pointer flex-col rounded-2xl border p-4 transition-colors ${
                   ttsMode === "native"
@@ -82,18 +96,18 @@ function DriverSettingsDialog({
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-foreground">Rápida e gratuita</span>
+                  <span className="font-semibold text-foreground">Voz rápida do aparelho</span>
                   <input
                     type="radio"
                     name="ttsMode"
                     value="native"
                     checked={ttsMode === "native"}
-                    onChange={() => setTtsMode("native")}
+                    onChange={() => handleChooseTts("native")}
                     className="accent-accent-ink h-5 w-5"
                   />
                 </div>
                 <p className="mt-1 text-sm text-muted">
-                  Voz nativa do aparelho (iOS / Siri / Luciana). Latência imediata e sem custo de tokens de áudio.
+                  Usa a voz do celular. Responde na hora e não gasta dados.
                 </p>
               </label>
 
@@ -105,42 +119,20 @@ function DriverSettingsDialog({
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-foreground">Voz HD (OpenAI TTS)</span>
+                  <span className="font-semibold text-foreground">Voz natural (usa mais dados)</span>
                   <input
                     type="radio"
                     name="ttsMode"
                     value="openai"
                     checked={ttsMode === "openai"}
-                    onChange={() => setTtsMode("openai")}
+                    onChange={() => handleChooseTts("openai")}
                     className="accent-accent-ink h-5 w-5"
                   />
                 </div>
                 <p className="mt-1 text-sm text-muted">
-                  Síntese neural ultra-natural em alta definição via OpenAI.
+                  Voz mais natural, que pode demorar um pouco mais para começar.
                 </p>
               </label>
-            </div>
-          </section>
-
-          {/* Motor de Sessão */}
-          <section className="space-y-2">
-            <span className="block text-sm font-semibold text-foreground">Motor de voz</span>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between rounded-2xl border border-accent-ink bg-accent/10 px-4 py-3">
-                <span className="text-base font-medium text-foreground">Whisper STT + TTS</span>
-                <span className="rounded-full bg-accent/20 px-2.5 py-0.5 text-xs font-semibold text-accent-ink">
-                  Padrão
-                </span>
-              </div>
-              <div
-                aria-disabled="true"
-                className="flex cursor-not-allowed items-center justify-between rounded-2xl border border-border bg-background/40 px-4 py-3 opacity-60"
-              >
-                <span className="text-base text-muted">GPT-Live-1 (WebRTC Full-Duplex)</span>
-                <span className="rounded-full border border-border bg-surface px-2.5 py-0.5 text-xs font-semibold text-muted">
-                  Em breve
-                </span>
-              </div>
             </div>
           </section>
 
@@ -218,15 +210,7 @@ function DriverSettingsDialog({
             </div>
           </section>
 
-          <footer className="pt-2">
-            <button
-              type="submit"
-              className="min-h-16 w-full rounded-3xl bg-accent text-xl font-semibold text-on-accent transition-transform active:scale-[0.98]"
-            >
-              Salvar alterações
-            </button>
-          </footer>
-        </form>
+        </div>
       </div>
     </div>
   );

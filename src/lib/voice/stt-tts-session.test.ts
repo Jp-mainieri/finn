@@ -287,6 +287,63 @@ describe("SttTtsVoiceSession session lifecycle & VAD", () => {
     }
   });
 
+  describe("other transcribe failures speak a fixed line and never leak technical text", () => {
+    const runUtterance = async (outcome: () => Promise<Response>) => {
+      vi.useFakeTimers();
+      fetchMock.mockImplementationOnce(outcome);
+      const session = new SttTtsVoiceSession({
+        audio: mockAudio as unknown as AudioIO,
+        getToken: () => "s3cret",
+        getTtsMode: () => "openai",
+        handlers,
+        fetchImpl: fetchMock,
+      });
+      await session.connect();
+      for (let i = 0; i < 12; i++) {
+        vi.advanceTimersByTime(32);
+        session.processFrame(new Int16Array(512).fill(2000));
+      }
+      for (let i = 0; i < 30; i++) {
+        vi.advanceTimersByTime(32);
+        session.processFrame(new Int16Array(512));
+      }
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    };
+    const userTexts = () =>
+      (handlers.onUserTranscript as ReturnType<typeof vi.fn>).mock.calls.map(([t]) => (t as { delta: string }).delta);
+
+    it.each([500, 502, 400])("HTTP %i says 'não consegui te ouvir' and shows no HTTP text", async (status) => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      await runUtterance(async () => Response.json({ error: "x" }, { status }));
+      expect(handlers.onAssistantTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({ delta: "Não consegui te ouvir, tente de novo." }),
+      );
+      expect(userTexts().join(" ")).not.toMatch(/HTTP|Erro na|\(/);
+      expect(fetchMock.mock.calls.map(([u]) => u)).not.toContain("/api/realtime/tts");
+    });
+
+    it("a network failure says 'sem internet' and shows no raw error", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      await runUtterance(async () => {
+        throw new TypeError("Load failed");
+      });
+      expect(handlers.onAssistantTranscript).toHaveBeenCalledWith(expect.objectContaining({ delta: "Sem internet." }));
+      expect(userTexts().join(" ")).not.toMatch(/Load failed|Falha|\(/);
+      expect(handlers.onError).toHaveBeenCalledWith("STT failed");
+    });
+
+    it("a non-network exception says 'não consegui te ouvir'", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      await runUtterance(async () => {
+        throw new Error("boom");
+      });
+      expect(handlers.onAssistantTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({ delta: "Não consegui te ouvir, tente de novo." }),
+      );
+    });
+  });
+
   describe("local speech for a 429 whose body is still being read", () => {
     /** Drives one utterance to the transcribe request without firing the body-read deadline. */
     async function utterance(session: SttTtsVoiceSession) {

@@ -7,7 +7,7 @@ import {
   VAD_SILENCE_MS,
   VAD_SPEECH_THRESHOLD,
 } from "./config";
-import { LOCAL_SPEECH, classifyServerFailure } from "./failure-speech";
+import { LOCAL_SPEECH, SPEECH_FAILURE_LINES, classifyServerFailure, isOffline } from "./failure-speech";
 import type { VoiceSession, VoiceSessionHandlers } from "./voice-session";
 
 export interface SttTtsVoiceSessionOptions {
@@ -277,14 +277,6 @@ export class SttTtsVoiceSession implements VoiceSession {
       return; // Discard click / brief noise (keep turnPcmChunks intact for manual "Pronto")
     }
 
-    if (!this.options.fetchImpl) {
-      const secs = ((chunks.length * 512) / 16000).toFixed(1);
-      this.options.handlers.onUserTranscript({
-        delta: `(Enviando ${secs}s de áudio para o Whisper…)`,
-        startMs: this.sessionOffsetMs(),
-        endMs: this.sessionOffsetMs(),
-      });
-    }
     void this.transcribeAndDelegate(chunks);
   }
 
@@ -331,11 +323,8 @@ export class SttTtsVoiceSession implements VoiceSession {
       }
 
       if (!res.ok) {
-        this.options.handlers.onUserTranscript({
-          delta: `(Erro na transcrição: HTTP ${res.status})`,
-          startMs: this.sessionOffsetMs(),
-          endMs: this.sessionOffsetMs(),
-        });
+        // Never show the raw status; say a fixed line with the phone's own voice.
+        this.speakLocal(SPEECH_FAILURE_LINES.not_heard);
         this.options.handlers.onError("Transcription error");
         return;
       }
@@ -370,13 +359,8 @@ export class SttTtsVoiceSession implements VoiceSession {
       });
     } catch (err) {
       console.warn("[voice-session] STT transcribe request failed", err);
-      if (!this.options.fetchImpl) {
-        const msg = err instanceof Error ? err.message : "erro de rede";
-        this.options.handlers.onUserTranscript({
-          delta: `(Falha ao enviar áudio: ${msg})`,
-          startMs: this.sessionOffsetMs(),
-          endMs: this.sessionOffsetMs(),
-        });
+      if (!this.closed && reqId === this.transcribeReqSeq) {
+        this.speakLocal(SPEECH_FAILURE_LINES[isOffline(err) ? "offline" : "not_heard"]);
       }
       this.options.handlers.onError("STT failed");
     } finally {

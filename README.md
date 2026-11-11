@@ -2,7 +2,9 @@
 
 Assistente de voz para dirigir: o motorista fala, e agentes de IA tocam música no Spotify e abrem rotas no Waze, sem tirar as mãos do volante.
 
-<!-- DEMO -->
+[![Demo do Finn](docs/demo.gif)](docs/demo.mp4)
+
+*Clique para ver o vídeo completo (66 s). A demo roda o app real localmente em **modo simulado**: as vozes, a transcrição, a abertura do Waze e a resposta do Spotify são simuladas (não há conta conectada). No modo mock, as tool calls vêm de um script de regras, sem LLM; em produção quem escolhe a tool é o LLM.*
 
 ## O problema
 
